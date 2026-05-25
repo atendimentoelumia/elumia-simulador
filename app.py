@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import requests
+import re
 from io import BytesIO
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -30,7 +32,7 @@ MAPA_IMPOSTOS = {
     "EQUATORIAL MA": {"UF": "MA", "ICMS": 0.20, "PIS_COFINS": 0.0925},
 }
 
-# --- INTEGRAÇÃO: LEITURA DO CSV LOCAL (AUTO-DETECÇÃO DE SEPARADOR) ---
+# --- INTEGRAÇÃO: LEITURA DO CSV LOCAL ---
 NOME_ARQUIVO_CSV = "tarifas.csv"
 
 @st.cache_data
@@ -115,6 +117,36 @@ def fetch_fatura_data(concessionaria, subgrupo, modalidade):
 
 # --- PARÂMETROS COMERCIAIS ---
 st.sidebar.header("🎯 Qualificação do Cliente")
+
+# INTEGRAÇÃO DE API CNPJ
+if "nome_cliente_auto" not in st.session_state:
+    st.session_state.nome_cliente_auto = ""
+
+cnpj_input = st.sidebar.text_input("CNPJ (Aperte Enter para buscar)", placeholder="00.000.000/0000-00")
+
+if cnpj_input:
+    # Limpa o texto deixando apenas os números
+    cnpj_limpo = re.sub(r'[^0-9]', '', cnpj_input)
+    
+    if len(cnpj_limpo) == 14:
+        with st.sidebar.spinner("Consultando Receita Federal..."):
+            try:
+                # Consulta na BrasilAPI (Gratuita e sem limites estritos)
+                response = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj_limpo}", timeout=10)
+                if response.status_code == 200:
+                    dados = response.json()
+                    st.session_state.nome_cliente_auto = dados.get('razao_social', '')
+                    st.sidebar.success("CNPJ Validado e Ativo!")
+                else:
+                    st.sidebar.error("CNPJ não encontrado na base.")
+            except Exception:
+                st.sidebar.warning("Aviso: Instabilidade na validação online.")
+    elif len(cnpj_limpo) > 0:
+        st.sidebar.warning("Um CNPJ deve conter exatamente 14 números.")
+
+nome_cliente = st.sidebar.text_input("Nome / Razão Social", value=st.session_state.nome_cliente_auto)
+st.sidebar.markdown("---")
+
 list_concessionarias = fetch_aneel_companies()
 concessionaria = st.sidebar.selectbox("Distribuidora Atual", list_concessionarias)
 
@@ -202,11 +234,14 @@ dados_melhor = resultados_comercializadoras_mes[melhor_com_mes]
 st.title("⚡ E-Lumia | Hub Solution Intelligence")
 st.markdown("## Estudo Comparativo de Faturamento: Cativo vs. Mercado Livre")
 
+# Saudação personalizada se o cliente estiver preenchido
+saudacao_cliente = f"para <b>{nome_cliente}</b>" if nome_cliente else "para a sua empresa"
+
 st.markdown(f"""
 <div class="card-vendas">
     <span style="font-size:20px; font-weight:bold; color:#3B82F6;">📈 Diagnóstico Comercial Executivo</span><br/>
-    Identificamos que o parceiro mais competitivo para o Ano 1 do seu contrato é a <b>{melhor_com_mes}</b>. 
-    A migração garante uma redução real de <b>{dados_melhor['percentual']:.1f}%</b> nas suas despesas operacionais com energia elétrica.
+    Identificamos que o parceiro mais competitivo no 1º ano {saudacao_cliente} é a <b>{melhor_com_mes}</b>. 
+    A migração garante uma redução real de <b>{dados_melhor['percentual']:.1f}%</b> nas despesas operacionais com energia elétrica.
 </div>
 """, unsafe_allow_html=True)
 
@@ -267,7 +302,6 @@ with col_g1:
             imp_dem + imp_tp + imp_tfp + imp_tep + imp_tefp
         ]
     })
-    # Cores mais vibrantes para destacar no fundo escuro
     fig_cat = px.pie(df_pizza_cat, values="Valor", names="Componente", hole=0.4, color_discrete_sequence=["#3B82F6", "#38BDF8", "#F87171"])
     fig_cat.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=260)
     st.plotly_chart(fig_cat, use_container_width=True)
@@ -278,7 +312,6 @@ with col_g2:
         "Destinatário": ["Faturamento Concessionária (TUSD)", "Faturamento Comercializadora (Energia)", "Faturamento Gestão (E-Lumia)"],
         "Valor": [fatura_residual_concessionaria_acl, dados_melhor['fatura_energia'], total_gestao_elumia_mes]
     })
-    # Cores mais vibrantes para destacar no fundo escuro
     fig_acl = px.pie(df_pizza_acl, values="Valor", names="Destinatário", hole=0.4, color_discrete_sequence=["#94A3B8", "#4ADE80", "#FBBF24"])
     fig_acl.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=260)
     st.plotly_chart(fig_acl, use_container_width=True)
@@ -316,27 +349,18 @@ linhas_proj = []
 anos_reais = int(tempo_contrato / 12)
 
 for ano_idx in range(anos_reais):
-    # Fatores de inflação: 8% a.a. para tarifas reguladas / 6% a.a. para energia livre e gestão
     fator_distribuidora = (1 + 0.08) ** ano_idx
     fator_energia_livre = (1 + 0.06) ** ano_idx 
     
-    # Cativo inflaciona integralmente em 8%
     custo_cativo_ano = (fatura_mensal_cativa * 12) * fator_distribuidora
-    
     row = {"Ano": ano_idx + 1, "Mercado Cativo": custo_cativo_ano}
     
     for com in comercializadoras:
-        # Preço inputado pelo usuário sofre reajuste de 6%
         preco_inputado = dados_precos[com][ano_idx]
         preco_com_inflacao = preco_inputado * fator_energia_livre
         
-        # Calcula o total anual da energia já com a inflação de 6%
         _, _, fatura_energia_ano = decompor_item((consumo_total_ano_mwh) * preco_com_inflacao)
-        
-        # Parcela que fica com a distribuidora no Livre (TUSD) inflaciona em 8% (igual ao cativo)
         fatura_resid_ano = (fatura_residual_concessionaria_acl * 12) * fator_distribuidora
-        
-        # Gestão E-Lumia inflaciona em 6%
         fee_ano = (total_gestao_elumia_mes * 12) * fator_energia_livre
         
         row[com] = fatura_resid_ano + fatura_energia_ano + fee_ano
@@ -406,6 +430,11 @@ def build_pdf():
     story.append(Paragraph("PROPOSTA EXECUTIVA DE MIGRAÇÃO - MERCADO LIVRE DE ENERGIA", title_style))
     story.append(Paragraph("E-LUMIA | Hub Solution Intelligence", subtitle_style))
     
+    # Dados do Cliente no PDF
+    if nome_cliente or cnpj_input:
+        story.append(Paragraph(f"<b>Preparado exclusivamente para:</b> {nome_cliente} (CNPJ: {cnpj_input})", bold_style))
+        story.append(Spacer(1, 10))
+
     story.append(Paragraph(f"Com base no mapeamento do seu perfil de consumo na <b>{concessionaria}</b>, desenvolvemos este estudo estratégico para a otimização de suas despesas operacionais através do Mercado Livre de Energia.", normal_style))
 
     # 1. RANKING DE COMERCIALIZADORAS
@@ -418,11 +447,7 @@ def build_pdf():
     for i, (com, res) in enumerate(sorted_coms):
         preco_mwh = dados_precos[com][0]
         ranking_data.append([
-            f"{i+1}º Lugar",
-            com,
-            f"R$ {preco_mwh:,.2f} /MWh",
-            f"R$ {res['economia_reais']:,.2f}",
-            f"{res['percentual']:.2f}%"
+            f"{i+1}º Lugar", com, f"R$ {preco_mwh:,.2f} /MWh", f"R$ {res['economia_reais']:,.2f}", f"{res['percentual']:.2f}%"
         ])
 
     t_ranking = Table(ranking_data, colWidths=[70, 150, 110, 110, 70])
@@ -464,7 +489,6 @@ def build_pdf():
 
     # 3. PROJEÇÃO DE LONGO PRAZO
     story.append(Paragraph(f"3. Estudo de Viabilidade e Blindagem ({tempo_contrato} Meses)", h2_style))
-    
     story.append(Paragraph("A simulação abaixo considera um reajuste de 8% a.a. projetado no Mercado Cativo e na tarifa da Distribuidora (Fio), e um reajuste de 6% a.a. aplicado sobre o preço de Energia e Gestão no Mercado Livre:", normal_style))
     
     proj_data = [["Período", "Projeção Cativo (R$)", f"Projeção ACL (R$)", "Economia Financeira"]]
@@ -504,9 +528,13 @@ def build_pdf():
 
 st.subheader("🖨️ Central de Fechamento de Propostas")
 pdf_data = build_pdf()
+
+# Nome do arquivo customizado para o cliente
+nome_arquivo = f"Estudo_Viabilidade_{nome_cliente.replace(' ', '_')}.pdf" if nome_cliente else "Estudo_Viabilidade_ELumia.pdf"
+
 st.download_button(
     label="📄 Baixar Proposta Executiva Comercial (PDF)",
     data=pdf_data,
-    file_name=f"Estudo_Viabilidade_ELumia.pdf",
+    file_name=nome_arquivo,
     mime="application/pdf"
 )
