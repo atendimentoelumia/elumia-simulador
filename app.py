@@ -6,6 +6,7 @@ import requests
 import re
 import hashlib
 from io import BytesIO
+from datetime import datetime
 
 # Importações para o ecossistema Google Drive API
 from google.oauth2 import service_account
@@ -203,7 +204,7 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# SEÇÃO: MATRIZ DE PREÇOS COMPLETA INPUTADA (NOVA SOLICITAÇÃO)
+# SEÇÃO: MATRIZ DE PREÇOS COMPLETA INPUTADA
 st.subheader("🏢 Matriz Global de Ofertas de Fornecedores Mapeados")
 st.markdown("Acompanhamento consolidado das curvas de preços de fornecimento inseridas para cada ano de planejamento:")
 
@@ -274,6 +275,14 @@ st.dataframe(df_estudo_integral.style.format({
     "Economia Financeira no Ano": "R$ {:,.2f}"
 }), use_container_width=True, hide_index=True)
 
+# KPIs de encerramento
+st.markdown("#### **Resultado Líquido do Investimento no Horizonte Contratual**")
+k_final1, k_final2, k_final3 = st.columns(3)
+k_final1.metric("Gasto Total Acumulado no Cativo", f"R$ {custo_cativo_acumulado_total:,.2f}")
+k_final2.metric(f"Gasto Total Acumulado no ACL ({melhor_com_mes})", f"R$ {custo_livre_acumulado_total:,.2f}")
+k_final3.metric("Patrimônio Líquido Recuperado", f"R$ {(custo_cativo_acumulado_total - custo_livre_acumulado_total):,.2f}", 
+                delta=f"{dados_melhor['percentual']:.1f}% de Ganho Médio")
+
 # --- ENGINE DE EXPORTAÇÃO E MONTAGEM DO PDF ESPELHADO ---
 def build_pdf():
     buffer = BytesIO()
@@ -294,7 +303,7 @@ def build_pdf():
         story.append(Paragraph(f"<b>Target Client:</b> {nome_cliente} (CNPJ: {cnpj_input})", bold_style))
         story.append(Spacer(1, 5))
 
-    # Tabela 1: Nova Matriz Global de Fornecedores no PDF
+    # Tabela 1: Matriz Global de Fornecedores no PDF
     story.append(Paragraph("1. Matriz Global de Ofertas Computadas (Anual)", h2_style))
     pdf_global_matrix_data = [["Fornecedor", "Ano 1", "Ano 2", "Ano 3", "Ano 4", "Ano 5"]]
     for row in linhas_matriz_global:
@@ -365,7 +374,6 @@ pdf_bytes = build_pdf()
 # --- AUTOMAÇÃO INTELIGENTE DE BACKGROUND UPLOAD (GOOGLE DRIVE API) ---
 def upload_automatico_drive(data_bytes, name_file):
     try:
-        # Puxa a chave JSON da Service Account direto da infra do Streamlit Cloud Secrets
         info_keys = st.secrets["gdrive_credentials"]
         folder_target_id = st.secrets["gdrive_folder_id"]
         
@@ -375,8 +383,6 @@ def upload_automatico_drive(data_bytes, name_file):
         meta_data = {'name': name_file, 'parents': [folder_target_id]}
         stream_media = MediaIoBaseUpload(BytesIO(data_bytes), mimetype='application/pdf', resumable=True)
         
-        # Executa a gravação na nuvem
-       # Executa a gravação na nuvem (agora com suporte a Drives Compartilhados)
         service_drive.files().create(
             body=meta_data, 
             media_body=stream_media, 
@@ -385,7 +391,6 @@ def upload_automatico_drive(data_bytes, name_file):
         ).execute()
         return True
     except Exception as error_log:
-        # Não trava o app na tela caso falte configurar as credenciais secretas
         return str(error_log)
 
 # ALGORITMO DE MONITORAMENTO (HASH TRACKER DE INPUTS)
@@ -397,19 +402,28 @@ if "last_uploaded_state_hash" not in st.session_state:
 
 # Condicional de Estabilidade: Só envia se for uma simulação preenchida inédita
 if hash_estado_atual != st.session_state.last_uploaded_state_hash and len(cnpj_limpo) == 14:
-    nome_arquivamento_drive = f"AutoSave_Proposta_{nome_cliente.replace(' ', '_')}_{hash_estado_atual[:6]}.pdf"
+    # CAPTURA DA DATA ATUAL E HIGIENIZAÇÃO DO NOME DO ARQUIVO
+    data_atual = datetime.now().strftime("%d-%m-%Y")
+    nome_cliente_limpo = re.sub(r'[\\/*?:"<>|.]', '', nome_cliente).replace(' ', '_')
+    
+    nome_arquivamento_drive = f"Proposta_{nome_cliente_limpo}_{data_atual}.pdf"
     status_upload = upload_automatico_drive(pdf_bytes, nome_arquivamento_drive)
     
     if status_upload is True:
         st.sidebar.success(f"💾 Cópia de Segurança arquivada automaticamente no Google Drive!")
         st.session_state.last_uploaded_state_hash = hash_estado_atual
     else:
-        # AGORA ELE VAI MOSTRAR O ERRO REAL EM VERMELHO!
         st.sidebar.error(f"Erro ao salvar no Drive: {status_upload}")
+
 # CENTRAL DE DOWNLOAD MANUAL DO USUÁRIO
 st.markdown("---")
 st.subheader("🖨️ Central de Fechamento de Propostas")
-nome_arquivo_manual = f"Estudo_Viabilidade_{nome_cliente.replace(' ', '_')}.pdf" if nome_cliente else "Estudo_Viabilidade_ELumia.pdf"
+
+# CAPTURA DA DATA ATUAL E HIGIENIZAÇÃO PARA O BOTÃO MANUAL
+data_atual = datetime.now().strftime("%d-%m-%Y")
+nome_cliente_limpo = re.sub(r'[\\/*?:"<>|.]', '', nome_cliente).replace(' ', '_') if nome_cliente else "ELumia"
+nome_arquivo_manual = f"Estudo_Viabilidade_{nome_cliente_limpo}_{data_atual}.pdf"
+
 st.download_button(
     label="📄 Baixar Proposta Executiva Comercial (PDF)",
     data=pdf_bytes,
