@@ -376,7 +376,13 @@ def upload_automatico_drive(data_bytes, name_file):
         stream_media = MediaIoBaseUpload(BytesIO(data_bytes), mimetype='application/pdf', resumable=True)
         
         # Executa a gravação na nuvem
-        service_drive.files().create(body=meta_data, media_body=stream_media, fields='id').execute()
+       # Executa a gravação na nuvem (agora com suporte a Drives Compartilhados)
+        service_drive.files().create(
+            body=meta_data, 
+            media_body=stream_media, 
+            fields='id',
+            supportsAllDrives=True
+        ).execute()
         return True
     except Exception as error_log:
         # Não trava o app na tela caso falte configurar as credenciais secretas
