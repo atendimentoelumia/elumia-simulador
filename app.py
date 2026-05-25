@@ -395,11 +395,11 @@ if hash_estado_atual != st.session_state.last_uploaded_state_hash and len(cnpj_l
     status_upload = upload_automatico_drive(pdf_bytes, nome_arquivamento_drive)
     
     if status_upload is True:
-        st.sidebar.caption(f"💾 Cópia de Segurança arquivada automaticamente no Google Drive!")
+        st.sidebar.success(f"💾 Cópia de Segurança arquivada automaticamente no Google Drive!")
         st.session_state.last_uploaded_state_hash = hash_estado_atual
     else:
-        st.sidebar.caption("⚠️ Nota: AutoSave aguardando configuração de chaves do Drive.")
-
+        # AGORA ELE VAI MOSTRAR O ERRO REAL EM VERMELHO!
+        st.sidebar.error(f"Erro ao salvar no Drive: {status_upload}")
 # CENTRAL DE DOWNLOAD MANUAL DO USUÁRIO
 st.markdown("---")
 st.subheader("🖨️ Central de Fechamento de Propostas")
