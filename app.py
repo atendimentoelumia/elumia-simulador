@@ -104,6 +104,28 @@ def fetch_fatura_data(concessionaria, subgrupo, modalidade):
 
     return {"tusd_demanda": tusd_demanda, "tusd_energia_p": tusd_energia_p, "tusd_energia_fp": tusd_energia_fp, "te_p": te_p, "te_fp": te_fp}
 
+# --- FUNÇÃO DE ARQUIVAMENTO AUTOMÁTICO (DRIVE API) ---
+def upload_automatico_drive(data_bytes, name_file):
+    try:
+        info_keys = st.secrets["gdrive_credentials"]
+        folder_target_id = st.secrets["gdrive_folder_id"]
+        
+        credentials_account = service_account.Credentials.from_service_account_info(info_keys)
+        service_drive = build('drive', 'v3', credentials=credentials_account)
+        
+        meta_data = {'name': name_file, 'parents': [folder_target_id]}
+        stream_media = MediaIoBaseUpload(BytesIO(data_bytes), mimetype='application/pdf', resumable=True)
+        
+        service_drive.files().create(
+            body=meta_data, 
+            media_body=stream_media, 
+            fields='id',
+            supportsAllDrives=True
+        ).execute()
+        return True
+    except Exception as error_log:
+        return str(error_log)
+
 # --- BARRA LATERAL: ENTRADA DE DADOS ---
 st.sidebar.header("🎯 Qualificação do Cliente")
 
@@ -162,271 +184,221 @@ for com in comercializadoras:
 
 componentes = fetch_fatura_data(concessionaria, subgrupo, modalidade)
 
-# --- MATRIZ FINANCEIRA DE PROSPECÇÃO ---
-def decompor_item(valor_base):
-    valor_com_imposto = valor_base / (1 - impostos_totais)
-    imposto_calculado = valor_com_imposto * impostos_totais
-    return valor_base, imposto_calculado, valor_com_imposto
+# --- BOTÃO DISPARADOR EXPLICITO DE CÁLCULO E GRAVAÇÃO ---
+st.sidebar.markdown("---")
+botao_calcular = st.sidebar.button("🚀 Gerar Proposta Comercial", use_container_width=True, type="primary")
 
-_, _, total_demanda_cat = decompor_item(demanda_contratada * componentes["tusd_demanda"])
-_, _, total_tusd_p_cat = decompor_item(consumo_p * componentes["tusd_energia_p"])
-_, _, total_tusd_fp_cat = decompor_item(consumo_fp * componentes["tusd_energia_fp"])
-_, _, total_te_p_cat = decompor_item(consumo_p * componentes["te_p"])
-_, _, total_te_fp_cat = decompor_item(consumo_fp * componentes["te_fp"])
-
-fatura_mensal_cativa = total_demanda_cat + total_tusd_p_cat + total_tusd_fp_cat + total_te_p_cat + total_te_fp_cat
-_, _, total_demanda_acl = decompor_item(demanda_contratada * componentes["tusd_demanda"] * fator_desconto_demanda)
-fatura_residual_concessionaria_acl = total_demanda_acl + total_tusd_p_cat + total_tusd_fp_cat
-_, _, total_gestao_elumia_mes = decompor_item((consumo_total_mes_kwh / 1000) * fee_elumia_mwh)
-
-resultados_comercializadoras_mes = {}
-for com in comercializadoras:
-    preco_ano1 = dados_precos[com][0]
-    _, _, total_energia_mes = decompor_item((consumo_total_mes_kwh / 1000) * preco_ano1)
-    total_acl = fatura_residual_concessionaria_acl + total_energia_mes + total_gestao_elumia_mes
-    resultados_comercializadoras_mes[com] = {
-        "fatura_energia": total_energia_mes,
-        "custo_total_acl": total_acl,
-        "economia_reais": fatura_mensal_cativa - total_acl,
-        "percentual": ((fatura_mensal_cativa - total_acl) / fatura_mensal_cativa) * 100
-    }
-
-melhor_com_mes = min(resultados_comercializadoras_mes, key=lambda k: resultados_comercializadoras_mes[k]["custo_total_acl"])
-dados_melhor = resultados_comercializadoras_mes[melhor_com_mes]
-
-# --- RENDERIZAÇÃO NA TELA ---
 st.title("⚡ E-Lumia | Hub Solution Intelligence")
-saudacao = f"para <b>{nome_cliente}</b>" if nome_cliente else ""
-st.markdown(f"""
-<div class="card-vendas">
-    <span style="font-size:20px; font-weight:bold; color:#3B82F6;">📈 Diagnóstico Comercial Executivo</span><br/>
-    Parceiro mais competitivo selecionado {saudacao}: <b>{melhor_com_mes}</b> com economia de <b>{dados_melhor['percentual']:.1f}%</b>.
-</div>
-""", unsafe_allow_html=True)
+st.markdown("## Estudo Comparativo de Faturamento: Cativo vs. Mercado Livre")
 
-# SEÇÃO: MATRIZ DE PREÇOS COMPLETA INPUTADA
-st.subheader("🏢 Matriz Global de Ofertas de Fornecedores Mapeados")
-st.markdown("Acompanhamento consolidado das curvas de preços de fornecimento inseridas para cada ano de planejamento:")
-
-linhas_matriz_global = []
-for com in comercializadoras:
-    linhas_matriz_global.append({
-        "Comercializadora Mapeada": com,
-        "Ano 1 (R$/MWh)": dados_precos[com][0],
-        "Ano 2 (R$/MWh)": dados_precos[com][1],
-        "Ano 3 (R$/MWh)": dados_precos[com][2],
-        "Ano 4 (R$/MWh)": dados_precos[com][3],
-        "Ano 5 (R$/MWh)": dados_precos[com][4],
-    })
-df_matriz_global_tela = pd.DataFrame(linhas_matriz_global)
-st.dataframe(df_matriz_global_tela.style.format({
-    "Ano 1 (R$/MWh)": "R$ {:,.2f}", "Ano 2 (R$/MWh)": "R$ {:,.2f}", 
-    "Ano 3 (R$/MWh)": "R$ {:,.2f}", "Ano 4 (R$/MWh)": "R$ {:,.2f}", "Ano 5 (R$/MWh)": "R$ {:,.2f}"
-}), use_container_width=True, hide_index=True)
-
-# COMPARATIVO MENSAL E LONG-TERM
-col1, col2 = st.columns(2)
-with col1:
-    st.markdown("#### **Cenário Cativo**")
-    st.dataframe(pd.DataFrame({
-        "Componentes de Custo": ["Demanda", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta"],
-        "Valor": [total_demanda_cat, total_tusd_p_cat, total_tusd_fp_cat, total_te_p_cat, total_te_fp_cat]
-    }).style.format({"Valor": "R$ {:,.2f}"}), hide_index=True, use_container_width=True)
-with col2:
-    st.markdown(f"#### **Cenário Livre ({melhor_com_mes})**")
-    st.dataframe(pd.DataFrame({
-        "Componentes de Custo": ["Demanda TUSD", "TUSD Ponta", "TUSD F. Ponta", "Contrato Energia", "Gestão E-Lumia"],
-        "Valor": [total_demanda_acl, total_tusd_p_cat, total_tusd_fp_cat, dados_melhor['fatura_energia'], total_gestao_elumia_mes]
-    }).style.format({"Valor": "R$ {:,.2f}"}), hide_index=True, use_container_width=True)
-
-# ENGINE PROJEÇÃO DE ANOS REAIS
-linhas_proj = []
-anos_reais = int(tempo_contrato / 12)
-custo_cativo_acumulado_total = 0
-custo_livre_acumulado_total = 0
-
-for ano_idx in range(anos_reais):
-    fator_distribuidora = (1 + 0.08) ** ano_idx
-    fator_energia_livre = (1 + 0.06) ** ano_idx
+# LÓGICA CONDICIONAL: Toda a interface e automação só despertam após o clique do botão
+if botao_calcular:
     
-    custo_cativo_ano = (fatura_mensal_cativa * 12) * fator_distribuidora
-    preco_com_inflacao = dados_precos[melhor_com_mes][ano_idx] * fator_energia_livre
-    _, _, fatura_energia_ano = decompor_item(consumo_total_ano_mwh * preco_com_inflacao)
-    
-    fatura_resid_ano = (fatura_residual_concessionaria_acl * 12) * fator_distribuidora
-    fee_ano = (total_gestao_elumia_mes * 12) * fator_energia_livre
-    custo_acl_ano = fatura_resid_ano + fatura_energia_ano + fee_ano
-    
-    custo_cativo_acumulado_total += custo_cativo_ano
-    custo_livre_acumulado_total += custo_acl_ano
-    
-    linhas_proj.append({
-        "Período": f"Ano {ano_idx + 1}",
-        "Custo Projetado no Cativo": custo_cativo_ano,
-        f"Custo Otimizado ACL ({melhor_com_mes})": custo_acl_ano,
-        "Economia Financeira no Ano": custo_cativo_ano - custo_acl_ano
-    })
+    # 1. MATRIZ FINANCEIRA DE PROSPECÇÃO
+    def decompor_item(valor_base):
+        valor_com_imposto = valor_base / (1 - impostos_totais)
+        imposto_calculado = valor_com_imposto * impostos_totais
+        return valor_base, imposto_calculado, valor_com_imposto
 
-st.subheader("📈 Estudo de Longo Prazo")
-df_estudo_integral = pd.DataFrame(linhas_proj)
-st.dataframe(df_estudo_integral.style.format({
-    "Custo Projetado no Cativo": "R$ {:,.2f}",
-    f"Custo Otimizado ACL ({melhor_com_mes})": "R$ {:,.2f}",
-    "Economia Financeira no Ano": "R$ {:,.2f}"
-}), use_container_width=True, hide_index=True)
+    _, _, total_demanda_cat = decompor_item(demanda_contratada * componentes["tusd_demanda"])
+    _, _, total_tusd_p_cat = decompor_item(consumo_p * componentes["tusd_energia_p"])
+    _, _, total_tusd_fp_cat = decompor_item(consumo_fp * componentes["tusd_energia_fp"])
+    _, _, total_te_p_cat = decompor_item(consumo_p * componentes["te_p"])
+    _, _, total_te_fp_cat = decompor_item(consumo_fp * componentes["te_fp"])
 
-# KPIs de encerramento
-st.markdown("#### **Resultado Líquido do Investimento no Horizonte Contratual**")
-k_final1, k_final2, k_final3 = st.columns(3)
-k_final1.metric("Gasto Total Acumulado no Cativo", f"R$ {custo_cativo_acumulado_total:,.2f}")
-k_final2.metric(f"Gasto Total Acumulado no ACL ({melhor_com_mes})", f"R$ {custo_livre_acumulado_total:,.2f}")
-k_final3.metric("Patrimônio Líquido Recuperado", f"R$ {(custo_cativo_acumulado_total - custo_livre_acumulado_total):,.2f}", 
-                delta=f"{dados_melhor['percentual']:.1f}% de Ganho Médio")
+    fatura_mensal_cativa = total_demanda_cat + total_tusd_p_cat + total_tusd_fp_cat + total_te_p_cat + total_te_fp_cat
+    _, _, total_demanda_acl = decompor_item(demanda_contratada * componentes["tusd_demanda"] * fator_desconto_demanda)
+    fatura_residual_concessionaria_acl = total_demanda_acl + total_tusd_p_cat + total_tusd_fp_cat
+    _, _, total_gestao_elumia_mes = decompor_item((consumo_total_mes_kwh / 1000) * fee_elumia_mwh)
 
-# --- ENGINE DE EXPORTAÇÃO E MONTAGEM DO PDF ESPELHADO ---
-def build_pdf():
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
-    styles = getSampleStyleSheet()
-    
-    title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], fontSize=15, textColor=colors.HexColor("#1A365D"), spaceAfter=6, alignment=1)
-    subtitle_style = ParagraphStyle('SubTitle', parent=styles['Normal'], fontSize=11, textColor=colors.HexColor("#64748B"), alignment=1, spaceAfter=15)
-    h2_style = ParagraphStyle('H2Style', parent=styles['Heading2'], fontSize=12, textColor=colors.HexColor("#1E3A8A"), spaceBefore=12, spaceAfter=6, fontName='Helvetica-Bold')
-    normal_style = ParagraphStyle('Norm', parent=styles['Normal'], fontSize=9, spaceAfter=6)
-    bold_style = ParagraphStyle('BoldNorm', parent=styles['Normal'], fontSize=9, fontName='Helvetica-Bold', spaceAfter=6)
+    resultados_comercializadoras_mes = {}
+    for com in comercializadoras:
+        preco_ano1 = dados_precos[com][0]
+        _, _, total_energia_mes = decompor_item((consumo_total_mes_kwh / 1000) * preco_ano1)
+        total_acl = fatura_residual_concessionaria_acl + total_energia_mes + total_gestao_elumia_mes
+        resultados_comercializadoras_mes[com] = {
+            "fatura_energia": total_energia_mes,
+            "custo_total_acl": total_acl,
+            "economia_reais": fatura_mensal_cativa - total_acl,
+            "percentual": ((fatura_mensal_cativa - total_acl) / fatura_mensal_cativa) * 100
+        }
 
-    story = []
-    story.append(Paragraph("PROPOSTA EXECUTIVA DE MIGRAÇÃO - MERCADO LIVRE DE ENERGIA", title_style))
-    story.append(Paragraph("E-LUMIA | Hub Solution Intelligence", subtitle_style))
-    
-    if nome_cliente or cnpj_input:
-        story.append(Paragraph(f"<b>Target Client:</b> {nome_cliente} (CNPJ: {cnpj_input})", bold_style))
-        story.append(Spacer(1, 5))
+    melhor_com_mes = min(resultados_comercializadoras_mes, key=lambda k: resultados_comercializadoras_mes[k]["custo_total_acl"])
+    dados_melhor = resultados_comercializadoras_mes[melhor_com_mes]
 
-    # Tabela 1: Matriz Global de Fornecedores no PDF
-    story.append(Paragraph("1. Matriz Global de Ofertas Computadas (Anual)", h2_style))
-    pdf_global_matrix_data = [["Fornecedor", "Ano 1", "Ano 2", "Ano 3", "Ano 4", "Ano 5"]]
-    for row in linhas_matriz_global:
-        pdf_global_matrix_data.append([
-            row["Comercializadora Mapeada"],
-            f"R$ {row['Ano 1 (R$/MWh)']:,.2f}", f"R$ {row['Ano 2 (R$/MWh)']:,.2f}",
-            f"R$ {row['Ano 3 (R$/MWh)']:,.2f}", f"R$ {row['Ano 4 (R$/MWh)']:,.2f}",
-            f"R$ {row['Ano 5 (R$/MWh)']:,.2f}"
-        ])
-    t_global = Table(pdf_global_matrix_data, colWidths=[132, 84, 84, 84, 84, 84])
-    t_global.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('ALIGN', (1,0), (-1,-1), 'RIGHT'),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
-        ('FONTSIZE', (0,0), (-1,-1), 8),
-    ]))
-    story.append(t_global)
+    # Exibição do Card Executivo
+    saudacao = f"para <b>{nome_cliente}</b>" if nome_cliente else ""
+    st.markdown(f"""
+    <div class="card-vendas">
+        <span style="font-size:20px; font-weight:bold; color:#3B82F6;">📈 Diagnóstico Comercial Executivo Gerado com Sucesso!</span><br/>
+        Parceiro mais competitivo selecionado {saudacao}: <b>{melhor_com_mes}</b> com economia de <b>{dados_melhor['percentual']:.1f}%</b> no Ano 1.
+    </div>
+    """, unsafe_allow_html=True)
 
-    # Tabela 2: Cenário Mensal Comparativo
-    story.append(Paragraph("2. Engenharia de Distribuição Mensal (Ano 1)", h2_style))
-    pdf_fatura_data = [
-        ["Estrutura de Custo", "Cenário Cativo", f"Cenário Livre ({melhor_com_mes})"],
-        ["Faturamento Distribuidora Fio", f"R$ {(total_demanda_cat+total_tusd_p_cat+total_tusd_fp_cat):,.2f}", f"R$ {fatura_residual_concessionaria_acl:,.2f}"],
-        ["Contrato Consumo Energia", "-", f"R$ {dados_melhor['fatura_energia']:,.2f}"],
-        ["Gestão Hub E-Lumia", "-", f"R$ {total_gestao_elumia_mes:,.2f}"],
-        ["Custo de Desembolso Total", f"R$ {fatura_mensal_cativa:,.2f}", f"R$ {dados_melhor['custo_total_acl']:,.2f}"]
-    ]
-    t_fatura = Table(pdf_fatura_data, colWidths=[200, 170, 182])
-    t_fatura.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('ALIGN', (1,0), (-1,-1), 'RIGHT'),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
-        ('FONTSIZE', (0,0), (-1,-1), 8),
-        ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#F8FAFC")),
-    ]))
-    story.append(t_fatura)
+    # Exibição de Tabelas
+    st.subheader("🏢 Matriz Global de Ofertas de Fornecedores Mapeados")
+    linhas_matriz_global = []
+    for com in comercializadoras:
+        linhas_matriz_global.append({
+            "Comercializadora Mapeada": com,
+            "Ano 1 (R$/MWh)": dados_precos[com][0], "Ano 2 (R$/MWh)": dados_precos[com][1],
+            "Ano 3 (R$/MWh)": dados_precos[com][2], "Ano 4 (R$/MWh)": dados_precos[com][3], "Ano 5 (R$/MWh)": dados_precos[com][4],
+        })
+    df_matriz_global_tela = pd.DataFrame(linhas_matriz_global)
+    st.dataframe(df_matriz_global_tela.style.format({
+        "Ano 1 (R$/MWh)": "R$ {:,.2f}", "Ano 2 (R$/MWh)": "R$ {:,.2f}", 
+        "Ano 3 (R$/MWh)": "R$ {:,.2f}", "Ano 4 (R$/MWh)": "R$ {:,.2f}", "Ano 5 (R$/MWh)": "R$ {:,.2f}"
+    }), use_container_width=True, hide_index=True)
 
-    # Tabela 3: Estudo Cronológico Viabilidade
-    story.append(Paragraph("3. Curva Cronológica de Viabilidade Macroeconômica", h2_style))
-    proj_data = [["Período", "Projeção Cativo", "Projeção Otimizada ACL", "Economia Gerada"]]
-    for row in linhas_proj:
-        proj_data.append([
-            row["Período"], f"R$ {row['Custo Projetado no Cativo']:,.2f}",
-            f"R$ {row[f'Custo Otimizado ACL ({melhor_com_mes})']:,.2f}", f"R$ {row['Economia Financeira no Ano']:,.2f}"
-        ])
-    proj_data.append(["ACUMULADO CONTRATUAL", f"R$ {custo_cativo_acumulado_total:,.2f}", f"R$ {custo_livre_acumulado_total:,.2f}", f"R$ {(custo_cativo_acumulado_total - custo_livre_acumulado_total):,.2f}"])
-    
-    t_proj = Table(proj_data, colWidths=[140, 130, 130, 152])
-    t_proj.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('ALIGN', (1,0), (-1,-1), 'RIGHT'),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
-        ('FONTSIZE', (0,0), (-1,-1), 8),
-        ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#16A34A")),
-        ('TEXTCOLOR', (0,-1), (-1,-1), colors.whitesmoke),
-    ]))
-    story.append(t_proj)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("#### **Cenário Cativo**")
+        st.dataframe(pd.DataFrame({
+            "Componentes de Custo": ["Demanda", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta"],
+            "Valor": [total_demanda_cat, total_tusd_p_cat, total_tusd_fp_cat, total_te_p_cat, total_te_fp_cat]
+        }).style.format({"Valor": "R$ {:,.2f}"}), hide_index=True, use_container_width=True)
+    with col2:
+        st.markdown(f"#### **Cenário Livre ({melhor_com_mes})**")
+        st.dataframe(pd.DataFrame({
+            "Componentes de Custo": ["Demanda TUSD", "TUSD Ponta", "TUSD F. Ponta", "Contrato Energia", "Gestão E-Lumia"],
+            "Valor": [total_demanda_acl, total_tusd_p_cat, total_tusd_fp_cat, dados_melhor['fatura_energia'], total_gestao_elumia_mes]
+        }).style.format({"Valor": "R$ {:,.2f}"}), hide_index=True, use_container_width=True)
 
-    doc.build(story)
-    buffer.seek(0)
-    return buffer.getvalue()
+    # Engine de Projeção Long-Term
+    linhas_proj = []
+    anos_reais = int(tempo_contrato / 12)
+    custo_cativo_acumulado_total = 0
+    custo_livre_acumulado_total = 0
 
-pdf_bytes = build_pdf()
-
-# --- AUTOMAÇÃO INTELIGENTE DE BACKGROUND UPLOAD (GOOGLE DRIVE API) ---
-def upload_automatico_drive(data_bytes, name_file):
-    try:
-        info_keys = st.secrets["gdrive_credentials"]
-        folder_target_id = st.secrets["gdrive_folder_id"]
+    for ano_idx in range(anos_reais):
+        fator_distribuidora = (1 + 0.08) ** ano_idx
+        fator_energia_livre = (1 + 0.06) ** ano_idx
         
-        credentials_account = service_account.Credentials.from_service_account_info(info_keys)
-        service_drive = build('drive', 'v3', credentials=credentials_account)
+        custo_cativo_ano = (fatura_mensal_cativa * 12) * fator_distribuidora
+        preco_com_inflacao = dados_precos[melhor_com_mes][ano_idx] * fator_energia_livre
+        _, _, fatura_energia_ano = decompor_item(consumo_total_ano_mwh * preco_com_inflacao)
         
-        meta_data = {'name': name_file, 'parents': [folder_target_id]}
-        stream_media = MediaIoBaseUpload(BytesIO(data_bytes), mimetype='application/pdf', resumable=True)
+        fatura_resid_ano = (fatura_residual_concessionaria_acl * 12) * fator_distribuidora
+        fee_ano = (total_gestao_elumia_mes * 12) * fator_energia_livre
+        custo_acl_ano = fatura_resid_ano + fatura_energia_ano + fee_ano
         
-        service_drive.files().create(
-            body=meta_data, 
-            media_body=stream_media, 
-            fields='id',
-            supportsAllDrives=True
-        ).execute()
-        return True
-    except Exception as error_log:
-        return str(error_log)
+        custo_cativo_acumulado_total += custo_cativo_ano
+        custo_livre_acumulado_total += custo_acl_ano
+        
+        linhas_proj.append({
+            "Período": f"Ano {ano_idx + 1}",
+            "Custo Projetado no Cativo": custo_cativo_ano,
+            f"Custo Otimizado ACL ({melhor_com_mes})": custo_acl_ano,
+            "Economia Financeira no Ano": custo_cativo_ano - custo_acl_ano
+        })
 
-# ALGORITMO DE MONITORAMENTO (HASH TRACKER DE INPUTS)
-string_inputs_comerciais = f"{cnpj_limpo}-{nome_cliente}-{demanda_contratada}-{consumo_kwh_fp}-{str(dados_precos)}"
-hash_estado_atual = hashlib.md5(string_inputs_comerciais.encode()).hexdigest()
+    st.subheader("📈 Estudo de Longo Prazo Acumulado")
+    df_estudo_integral = pd.DataFrame(linhas_proj)
+    st.dataframe(df_estudo_integral.style.format({
+        "Custo Projetado no Cativo": "R$ {:,.2f}", f"Custo Otimizado ACL ({melhor_com_mes})": "R$ {:,.2f}", "Economia Financeira no Ano": "R$ {:,.2f}"
+    }), use_container_width=True, hide_index=True)
 
-if "last_uploaded_state_hash" not in st.session_state:
-    st.session_state.last_uploaded_state_hash = ""
+    k_final1, k_final2, k_final3 = st.columns(3)
+    k_final1.metric("Gasto Total no Cativo", f"R$ {custo_cativo_acumulado_total:,.2f}")
+    k_final2.metric(f"Gasto Total no ACL ({melhor_com_mes})", f"R$ {custo_livre_acumulado_total:,.2f}")
+    k_final3.metric("Patrimônio Recuperado", f"R$ {(custo_cativo_acumulado_total - custo_livre_acumulado_total):,.2f}")
 
-# Condicional de Estabilidade: Só envia se for uma simulação preenchida inédita
-if hash_estado_atual != st.session_state.last_uploaded_state_hash and len(cnpj_limpo) == 14:
-    # CAPTURA DA DATA ATUAL E HIGIENIZAÇÃO DO NOME DO ARQUIVO
+    # Geração Estruturada do PDF de Alta Fidelidade
+    def build_pdf():
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+        styles = getSampleStyleSheet()
+        
+        title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], fontSize=15, textColor=colors.HexColor("#1A365D"), spaceAfter=6, alignment=1)
+        subtitle_style = ParagraphStyle('SubTitle', parent=styles['Normal'], fontSize=11, textColor=colors.HexColor("#64748B"), alignment=1, spaceAfter=15)
+        h2_style = ParagraphStyle('H2Style', parent=styles['Heading2'], fontSize=12, textColor=colors.HexColor("#1E3A8A"), spaceBefore=12, spaceAfter=6, fontName='Helvetica-Bold')
+        bold_style = ParagraphStyle('BoldNorm', parent=styles['Normal'], fontSize=9, fontName='Helvetica-Bold', spaceAfter=6)
+
+        story = []
+        story.append(Paragraph("PROPOSTA EXECUTIVA DE MIGRAÇÃO - MERCADO LIVRE DE ENERGIA", title_style))
+        story.append(Paragraph("E-LUMIA | Hub Solution Intelligence", subtitle_style))
+        
+        if nome_cliente or cnpj_input:
+            story.append(Paragraph(f"<b>Target Client:</b> {nome_cliente} (CNPJ: {cnpj_input})", bold_style))
+            story.append(Spacer(1, 5))
+
+        story.append(Paragraph("1. Matriz Global de Ofertas Computadas (Anual)", h2_style))
+        pdf_global_matrix_data = [["Fornecedor", "Ano 1", "Ano 2", "Ano 3", "Ano 4", "Ano 5"]]
+        for row in linhas_matriz_global:
+            pdf_global_matrix_data.append([
+                row["Comercializadora Mapeada"],
+                f"R$ {row['Ano 1 (R$/MWh)']:,.2f}", f"R$ {row['Ano 2 (R$/MWh)']:,.2f}",
+                f"R$ {row['Ano 3 (R$/MWh)']:,.2f}", f"R$ {row['Ano 4 (R$/MWh)']:,.2f}", f"R$ {row['Ano 5 (R$/MWh)']:,.2f}"
+            ])
+        t_global = Table(pdf_global_matrix_data, colWidths=[132, 84, 84, 84, 84, 84])
+        t_global.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+            ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey), ('FONTSIZE', (0,0), (-1,-1), 8),
+        ]))
+        story.append(t_global)
+
+        story.append(Paragraph("2. Engenharia de Distribuição Mensal (Ano 1)", h2_style))
+        pdf_fatura_data = [
+            ["Estrutura de Custo", "Cenário Cativo", f"Cenário Livre ({melhor_com_mes})"],
+            ["Faturamento Distribuidora Fio", f"R$ {(total_demanda_cat+total_tusd_p_cat+total_tusd_fp_cat):,.2f}", f"R$ {fatura_residual_concessionaria_acl:,.2f}"],
+            ["Contrato Consumo Energia", "-", f"R$ {dados_melhor['fatura_energia']:,.2f}"],
+            ["Gestão Hub E-Lumia", "-", f"R$ {total_gestao_elumia_mes:,.2f}"],
+            ["Custo de Desembolso Total", f"R$ {fatura_mensal_cativa:,.2f}", f"R$ {dados_melhor['custo_total_acl']:,.2f}"]
+        ]
+        t_fatura = Table(pdf_fatura_data, colWidths=[200, 170, 182])
+        t_fatura.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+            ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
+            ('FONTSIZE', (0,0), (-1,-1), 8), ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#F8FAFC")),
+        ]))
+        story.append(t_fatura)
+
+        story.append(Paragraph("3. Curva Cronológica de Viabilidade Macroeconômica", h2_style))
+        proj_data = [["Período", "Projeção Cativo", "Projeção Otimizada ACL", "Economia Gerada"]]
+        for row in linhas_proj:
+            proj_data.append([
+                row["Período"], f"R$ {row['Custo Projetado no Cativo']:,.2f}",
+                f"R$ {row[f'Custo Otimizado ACL ({melhor_com_mes})']:,.2f}", f"R$ {row['Economia Financeira no Ano']:,.2f}"
+            ])
+        proj_data.append(["ACUMULADO CONTRATUAL", f"R$ {custo_cativo_acumulado_total:,.2f}", f"R$ {custo_livre_acumulado_total:,.2f}", f"R$ {(custo_cativo_acumulado_total - custo_livre_acumulado_total):,.2f}"])
+        
+        t_proj = Table(proj_data, colWidths=[140, 130, 130, 152])
+        t_proj.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+            ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
+            ('FONTSIZE', (0,0), (-1,-1), 8), ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#16A34A")), ('TEXTCOLOR', (0,-1), (-1,-1), colors.whitesmoke),
+        ]))
+        story.append(t_proj)
+
+        doc.build(story)
+        buffer.seek(0)
+        return buffer.getvalue()
+
+    pdf_bytes = build_pdf()
+
+    # GRAVAÇÃO AUTOMÁTICA DISPARADA EXCLUSIVAMENTE NO MOMENTO DO CLIQUE
     data_atual = datetime.now().strftime("%d-%m-%Y")
-    nome_cliente_limpo = re.sub(r'[\\/*?:"<>|.]', '', nome_cliente).replace(' ', '_')
-    
+    nome_cliente_limpo = re.sub(r'[\\/*?:"<>|.]', '', nome_cliente).replace(' ', '_') if nome_cliente else "Cliente_Nao_Identificado"
     nome_arquivamento_drive = f"Proposta_{nome_cliente_limpo}_{data_atual}.pdf"
+    
     status_upload = upload_automatico_drive(pdf_bytes, nome_arquivamento_drive)
     
     if status_upload is True:
-        st.sidebar.success(f"💾 Cópia de Segurança arquivada automaticamente no Google Drive!")
-        st.session_state.last_uploaded_state_hash = hash_estado_atual
+        st.sidebar.success(f"💾 Arquivado com sucesso no Google Drive!")
     else:
-        st.sidebar.error(f"Erro ao salvar no Drive: {status_upload}")
+        st.sidebar.error(f"Erro no backup automático: {status_upload}")
 
-# CENTRAL DE DOWNLOAD MANUAL DO USUÁRIO
-st.markdown("---")
-st.subheader("🖨️ Central de Fechamento de Propostas")
+    # Central de Download Manual
+    st.markdown("---")
+    st.subheader("🖨️ Central de Fechamento de Propostas")
+    nome_arquivo_manual = f"Estudo_Viabilidade_{nome_cliente_limpo}_{data_atual}.pdf"
+    st.download_button(
+        label="📄 Baixar Proposta Executiva Comercial (PDF)",
+        data=pdf_bytes,
+        file_name=nome_arquivo_manual,
+        mime="application/pdf"
+    )
 
-# CAPTURA DA DATA ATUAL E HIGIENIZAÇÃO PARA O BOTÃO MANUAL
-data_atual = datetime.now().strftime("%d-%m-%Y")
-nome_cliente_limpo = re.sub(r'[\\/*?:"<>|.]', '', nome_cliente).replace(' ', '_') if nome_cliente else "ELumia"
-nome_arquivo_manual = f"Estudo_Viabilidade_{nome_cliente_limpo}_{data_atual}.pdf"
-
-st.download_button(
-    label="📄 Baixar Proposta Executiva Comercial (PDF)",
-    data=pdf_bytes,
-    file_name=nome_arquivo_manual,
-    mime="application/pdf"
-)
+else:
+    # Mensagem de espera inicial quando o app abre zerado
+    st.info("👋 Preencha os dados do cliente e os preços das comercializadoras no menu à esquerda. Em seguida, clique em 'Gerar Proposta Comercial' para ver os resultados e arquivar o relatório.")
