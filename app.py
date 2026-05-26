@@ -57,7 +57,7 @@ NOME_ARQUIVO_CSV = "tarifas.csv"
 NOME_ARQUIVO_PRECOS = "precos_comercializadoras.csv"
 
 # --- MOTOR DE RASPAGEM DA INTERNET (WEB SCRAPING PLD) ---
-@st.cache_data(ttl=10800) # Busca na internet a cada 3 horas para não ser bloqueado pelos sites
+@st.cache_data(ttl=10800)
 def buscar_pld_internet():
     meses_pt = {1:"Janeiro", 2:"Fevereiro", 3:"Março", 4:"Abril", 5:"Maio", 6:"Junho", 7:"Julho", 8:"Agosto", 9:"Setembro", 10:"Outubro", 11:"Novembro", 12:"Dezembro"}
     mes_atual = meses_pt[datetime.now().month]
@@ -71,22 +71,13 @@ def buscar_pld_internet():
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
     
     try:
-        # Tenta raspar portais abertos de energia (Exemplo estrutural)
-        url = "https://ccee.org.br/" # A URL pode ser trocada futuramente por qualquer portal de notícias de energia
+        url = "https://ccee.org.br/" 
         response = requests.get(url, headers=headers, timeout=5)
-        
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
-            # Aqui o robô caçaria as classes HTML específicas da tabela de PLD do site alvo.
-            # Como o layout de sites abertos muda muito, se ele achar, ele substitui; se não achar, cai pro 'except' seguro.
-            
-            # Simulando sucesso da raspagem caso encontre os dados
-            # dados_pld["Sudeste"] = valor_capturado
-            # dados_pld["fonte"] = "Internet Ao Vivo"
             pass
-            
     except Exception:
-        pass # Se a internet oscilar ou o site bloquear, mantém o dado de segurança e não trava a reunião
+        pass 
         
     return dados_pld
 
@@ -121,7 +112,11 @@ def fetch_aneel_companies():
 @st.cache_data(ttl=3600)
 def fetch_fatura_data(concessionaria, subgrupo, modalidade):
     df = load_local_data()
-    tusd_demanda, tusd_energia_fp, tusd_energia_p, te_fp, te_p = 45.00, 80.0, 250.0, 320.0, 550.0
+    # Padrões conservadores
+    tusd_demanda = 25.00
+    tusd_demanda_p = 45.00
+    tusd_demanda_fp = 20.00
+    tusd_energia_fp, tusd_energia_p, te_fp, te_p = 80.0, 250.0, 320.0, 550.0
     
     if not df.empty:
         try:
@@ -141,8 +136,6 @@ def fetch_fatura_data(concessionaria, subgrupo, modalidade):
                         df_filtered[col_te] = pd.to_numeric(df_filtered[col_te].astype(str).str.replace(',', '.'), errors='coerce').fillna(0) * (1000 if df_filtered[col_te].max() < 10 else 1)
                     if col_tusd:
                         df_filtered[col_tusd] = pd.to_numeric(df_filtered[col_tusd].astype(str).str.replace(',', '.'), errors='coerce').fillna(0) * (1000 if df_filtered[col_tusd].max() < 10 else 1)
-
-                    tusd_demanda = 42.50 if modalidade == "Azul" else 20.80
                     
                     if col_posto:
                         df_filtered['posto_clean'] = df_filtered[col_posto].astype(str).str.lower().str.strip()
@@ -158,7 +151,15 @@ def fetch_fatura_data(concessionaria, subgrupo, modalidade):
         except Exception:
             pass
 
-    return {"tusd_demanda": tusd_demanda, "tusd_energia_p": tusd_energia_p, "tusd_energia_fp": tusd_energia_fp, "te_p": te_p, "te_fp": te_fp}
+    return {
+        "tusd_demanda": tusd_demanda, 
+        "tusd_demanda_p": tusd_demanda_p, 
+        "tusd_demanda_fp": tusd_demanda_fp, 
+        "tusd_energia_p": tusd_energia_p, 
+        "tusd_energia_fp": tusd_energia_fp, 
+        "te_p": te_p, 
+        "te_fp": te_fp
+    }
 
 def upload_automatico_drive(data_bytes, name_file):
     try:
@@ -217,10 +218,21 @@ modalidade = st.sidebar.selectbox("Modalidade na Distribuidora", ["Verde", "Azul
 tempo_contrato = st.sidebar.slider("Horizonte (Meses)", 12, 60, 36, step=12)
 
 tipo_energia = st.sidebar.selectbox("Produto Sugerido", ["Convencional", "Incentivada 50%", "Incentivada 100%"])
+# Fator multiplicador de desconto na TUSD Demanda (1.0 = paga integral / 0.5 = paga 50% / 0.0 = paga nada)
 fator_desconto_demanda = 1.0 if tipo_energia == "Convencional" else (0.5 if tipo_energia == "Incentivada 50%" else 0.0)
 
-st.sidebar.subheader("📊 Métricas de Consumo")
-demanda_contratada = st.sidebar.number_input("Demanda Contratada (kW)", value=500.0)
+st.sidebar.subheader("📊 Métricas de Consumo e Demanda")
+
+# LÓGICA DE INTERFACE PARA VERDE VS AZUL
+if modalidade == "Azul":
+    demanda_ponta = st.sidebar.number_input("Demanda Ponta (kW)", value=500.0)
+    demanda_fponta = st.sidebar.number_input("Demanda Fora Ponta (kW)", value=500.0)
+    demanda_unica = 0.0 # Placeholder
+else:
+    demanda_unica = st.sidebar.number_input("Demanda Contratada (kW)", value=500.0)
+    demanda_ponta = 0.0
+    demanda_fponta = 0.0
+
 consumo_kwh_fp = st.sidebar.number_input("Consumo Fora Ponta (kWh/mês)", value=120000.0, step=5000.0)
 consumo_kwh_p = st.sidebar.number_input("Consumo Ponta (kWh/mês)", value=15000.0, step=1000.0)
 fee_elumia_mwh = st.sidebar.number_input("Gestão Executiva E-Lumia (R$/MWh)", value=6.00, format="%.2f")
@@ -302,7 +314,6 @@ if pld_dados:
     
     pld1, pld2, pld3, pld4 = st.columns(4)
     
-    # Destaca com um "📍" e cor diferente o submercado que corresponde ao cliente atual
     def formatar_pld(mercado_nome, valor_pld):
         if mercado_nome.upper() == submercado_selecionado.upper():
             return f"📍 {mercado_nome}"
@@ -323,14 +334,26 @@ if botao_calcular:
         imposto_calculado = valor_com_imposto * impostos_totais
         return valor_base, imposto_calculado, valor_com_imposto
 
-    _, _, total_demanda_cat = decompor_item(demanda_contratada * componentes["tusd_demanda"])
+    # MOTOR DE CÁLCULO DE DEMANDA (AZUL VS VERDE)
+    if modalidade == "Azul":
+        _, _, total_demanda_p_cat = decompor_item(demanda_ponta * componentes["tusd_demanda_p"])
+        _, _, total_demanda_fp_cat = decompor_item(demanda_fponta * componentes["tusd_demanda_fp"])
+        total_demanda_cat = total_demanda_p_cat + total_demanda_fp_cat
+        
+        # Desconto de Incentivada se aplica a ambas as TUSDs de Demanda no Livre
+        _, _, total_demanda_p_acl = decompor_item(demanda_ponta * componentes["tusd_demanda_p"] * fator_desconto_demanda)
+        _, _, total_demanda_fp_acl = decompor_item(demanda_fponta * componentes["tusd_demanda_fp"] * fator_desconto_demanda)
+        total_demanda_acl = total_demanda_p_acl + total_demanda_fp_acl
+    else:
+        _, _, total_demanda_cat = decompor_item(demanda_unica * componentes["tusd_demanda"])
+        _, _, total_demanda_acl = decompor_item(demanda_unica * componentes["tusd_demanda"] * fator_desconto_demanda)
+
     _, _, total_tusd_p_cat = decompor_item(consumo_p * componentes["tusd_energia_p"])
     _, _, total_tusd_fp_cat = decompor_item(consumo_fp * componentes["tusd_energia_fp"])
     _, _, total_te_p_cat = decompor_item(consumo_p * componentes["te_p"])
     _, _, total_te_fp_cat = decompor_item(consumo_fp * componentes["te_fp"])
 
     fatura_mensal_cativa = total_demanda_cat + total_tusd_p_cat + total_tusd_fp_cat + total_te_p_cat + total_te_fp_cat
-    _, _, total_demanda_acl = decompor_item(demanda_contratada * componentes["tusd_demanda"] * fator_desconto_demanda)
     fatura_residual_concessionaria_acl = total_demanda_acl + total_tusd_p_cat + total_tusd_fp_cat
     _, _, total_gestao_elumia_mes = decompor_item((consumo_total_mes_kwh / 1000) * fee_elumia_mwh)
 
@@ -375,13 +398,13 @@ if botao_calcular:
     with col1:
         st.markdown("#### **Cenário Cativo**")
         st.dataframe(pd.DataFrame({
-            "Componentes de Custo": ["Demanda", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta"],
+            "Componentes de Custo": ["Demanda (TUSD)", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta"],
             "Valor": [total_demanda_cat, total_tusd_p_cat, total_tusd_fp_cat, total_te_p_cat, total_te_fp_cat]
         }).style.format({"Valor": "R$ {:,.2f}"}), hide_index=True, use_container_width=True)
     with col2:
         st.markdown(f"#### **Cenário Livre ({melhor_com_mes})**")
         st.dataframe(pd.DataFrame({
-            "Componentes de Custo": ["Demanda TUSD", "TUSD Ponta", "TUSD F. Ponta", "Contrato Energia", "Gestão E-Lumia"],
+            "Componentes de Custo": ["Demanda (TUSD c/ Desconto)", "TUSD Ponta", "TUSD F. Ponta", "Contrato Energia", "Gestão E-Lumia"],
             "Valor": [total_demanda_acl, total_tusd_p_cat, total_tusd_fp_cat, dados_melhor['fatura_energia'], total_gestao_elumia_mes]
         }).style.format({"Valor": "R$ {:,.2f}"}), hide_index=True, use_container_width=True)
 
