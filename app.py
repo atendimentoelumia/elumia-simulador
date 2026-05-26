@@ -101,10 +101,10 @@ def load_precos_data():
             except:
                 df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=';', encoding='latin1')
                 
-        df_precos.columns = df_precos.columns.str.strip()
+        # Força os nomes das colunas para Title Case (Ex: "ano" vira "Ano") e remove espaços
+        df_precos.columns = df_precos.columns.str.strip().str.title()
         return df_precos
     except Exception as e:
-        st.sidebar.error(f"Erro ao ler banco de preços ({NOME_ARQUIVO_PRECOS}): {e}")
         return pd.DataFrame()
 
 @st.cache_data(ttl=86400)
@@ -259,17 +259,18 @@ df_precos_globais = load_precos_data()
 comercializadoras = []
 dados_precos_auto = {}
 
+# MODO DETETIVE INCORPORADO
 if not df_precos_globais.empty:
-    cols = df_precos_globais.columns
+    cols = df_precos_globais.columns.tolist()
     
-    # Se o nome da coluna A1 ficou em branco, forçamos o nome 'Comercializadora'
+    # Se a primeira coluna não se chamar Comercializadora, forçamos a renomeação (corrige a imagem B1)
     if "Comercializadora" not in cols:
         df_precos_globais.rename(columns={cols[0]: "Comercializadora"}, inplace=True)
-        cols = df_precos_globais.columns
+        cols = df_precos_globais.columns.tolist()
 
+    # Verifica se as 3 colunas base estão no arquivo
     if "Comercializadora" in cols and "Ano" in cols and submercado_selecionado in cols:
         
-        # Se tiver coluna de Produto, ele filtra. Se não tiver, ignora e puxa tudo (para evitar travar)
         if "Produto" in cols:
             mask_filtros = (df_precos_globais["Produto"].astype(str).str.strip().str.upper() == tipo_energia.upper())
             df_filtrado = df_precos_globais[mask_filtros].sort_values(by=['Comercializadora', 'Ano'])
@@ -284,13 +285,11 @@ if not df_precos_globais.empty:
             
             precos_limpos = []
             for p in precos_brutos[:5]: 
-                # Limpeza extrema: tira "R$", tira espaços, tira letras, troca vírgula por ponto.
                 str_p = str(p).upper().replace('R$', '').strip()
                 str_p = re.sub(r'[^\d,.-]', '', str_p)
                 str_p = str_p.replace(',', '.')
                 
                 valor_num = pd.to_numeric(str_p, errors='coerce')
-                # Se ainda assim o valor for inválido, coloca zero em vez de 'None'
                 if pd.isna(valor_num):
                     valor_num = 0.0
                     
@@ -300,8 +299,22 @@ if not df_precos_globais.empty:
                 precos_limpos.append(precos_limpos[-1] if precos_limpos else 0.0)
             dados_precos_auto[com] = precos_limpos
 
+# SE FALHAR, ABRE A TELA DO DETETIVE
 if not comercializadoras:
-    st.sidebar.warning(f"⚠️ Valores não encontrados no arquivo CSV. Usando valores padrão para a simulação.")
+    st.sidebar.warning(f"⚠️ Valores não encontrados. Usando padrão.")
+    with st.sidebar.expander("🔍 MODO DETETIVE (Clique para ver o erro)", expanded=True):
+        st.write("**O que o sistema leu do seu CSV:**")
+        if df_precos_globais.empty:
+            st.error("O arquivo está completamente vazio ou corrompido.")
+        else:
+            st.code(list(df_precos_globais.columns))
+            if "Produto" in df_precos_globais.columns:
+                st.write("**Produtos cadastrados no CSV:**")
+                st.code(list(df_precos_globais["Produto"].astype(str).unique()))
+            else:
+                st.error("❌ Não achei a coluna 'Produto' no seu CSV.")
+            st.write(f"**Procurando por:** Coluna '{submercado_selecionado}' | Produto '{tipo_energia}'")
+
     comercializadoras = ["Casa dos Ventos Padrão", "Matrix Padrão"]
     dados_precos_auto = {
         "Casa dos Ventos Padrão": [180.0, 186.0, 192.5, 199.2, 206.1],
@@ -323,9 +336,10 @@ if modo_manual:
             dados_precos[com] = precos_anos
 else:
     dados_precos = dados_precos_auto
-    with st.sidebar.expander(f"👁️ Curvas '{tipo_energia}' Carregadas (CSV)", expanded=False):
-        df_display_sidebar = pd.DataFrame(dados_precos, index=["Ano 1", "Ano 2", "Ano 3", "Ano 4", "Ano 5"]).T
-        st.dataframe(df_display_sidebar.style.format("R$ {:.2f}"))
+    if not df_precos_globais.empty and comercializadoras != ["Casa dos Ventos Padrão", "Matrix Padrão"]:
+        with st.sidebar.expander(f"👁️ Curvas '{tipo_energia}' Carregadas (CSV)", expanded=False):
+            df_display_sidebar = pd.DataFrame(dados_precos, index=["Ano 1", "Ano 2", "Ano 3", "Ano 4", "Ano 5"]).T
+            st.dataframe(df_display_sidebar.style.format("R$ {:.2f}"))
 
 componentes = fetch_fatura_data(concessionaria, subgrupo, modalidade)
 
