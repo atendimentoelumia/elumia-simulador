@@ -93,7 +93,14 @@ def load_local_data():
 @st.cache_data(ttl=600)
 def load_precos_data():
     try:
-        df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=None, engine='python', encoding='utf-8-sig', on_bad_lines='skip')
+        try:
+            df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=';', encoding='utf-8-sig')
+        except:
+            try:
+                df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=',', encoding='utf-8-sig')
+            except:
+                df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=';', encoding='latin1')
+                
         df_precos.columns = df_precos.columns.str.strip()
         return df_precos
     except Exception as e:
@@ -112,7 +119,6 @@ def fetch_aneel_companies():
 @st.cache_data(ttl=3600)
 def fetch_fatura_data(concessionaria, subgrupo, modalidade):
     df = load_local_data()
-    # Padrões conservadores
     tusd_demanda = 25.00
     tusd_demanda_p = 45.00
     tusd_demanda_fp = 20.00
@@ -218,16 +224,14 @@ modalidade = st.sidebar.selectbox("Modalidade na Distribuidora", ["Verde", "Azul
 tempo_contrato = st.sidebar.slider("Horizonte (Meses)", 12, 60, 36, step=12)
 
 tipo_energia = st.sidebar.selectbox("Produto Sugerido", ["Convencional", "Incentivada 50%", "Incentivada 100%"])
-# Fator multiplicador de desconto na TUSD Demanda (1.0 = paga integral / 0.5 = paga 50% / 0.0 = paga nada)
 fator_desconto_demanda = 1.0 if tipo_energia == "Convencional" else (0.5 if tipo_energia == "Incentivada 50%" else 0.0)
 
 st.sidebar.subheader("📊 Métricas de Consumo e Demanda")
 
-# LÓGICA DE INTERFACE PARA VERDE VS AZUL
 if modalidade == "Azul":
     demanda_ponta = st.sidebar.number_input("Demanda Ponta (kW)", value=500.0)
     demanda_fponta = st.sidebar.number_input("Demanda Fora Ponta (kW)", value=500.0)
-    demanda_unica = 0.0 # Placeholder
+    demanda_unica = 0.0
 else:
     demanda_unica = st.sidebar.number_input("Demanda Contratada (kW)", value=500.0)
     demanda_ponta = 0.0
@@ -242,7 +246,7 @@ consumo_p = consumo_kwh_p / 1000
 consumo_total_mes_kwh = consumo_kwh_fp + consumo_kwh_p
 consumo_total_ano_mwh = (consumo_total_mes_kwh / 1000) * 12
 
-# --- CAPTURA DA DATA DE ATUALIZAÇÃO DO CSV ---
+# --- INTEGRAÇÃO DO BANCO DE PREÇOS COM LIMPEZA AGRESSIVA DE DADOS ---
 data_atualizacao_csv = "Data Indisponível"
 if os.path.exists(NOME_ARQUIVO_PRECOS):
     timestamp_modificacao = os.path.getmtime(NOME_ARQUIVO_PRECOS)
@@ -257,23 +261,47 @@ dados_precos_auto = {}
 
 if not df_precos_globais.empty:
     cols = df_precos_globais.columns
-    if "Comercializadora" in cols and "Ano" in cols and "Produto" in cols and submercado_selecionado in cols:
-        mask_filtros = (df_precos_globais["Produto"].astype(str).str.upper() == tipo_energia.upper())
-        df_filtrado = df_precos_globais[mask_filtros].sort_values(by=['Comercializadora', 'Ano'])
+    
+    # Se o nome da coluna A1 ficou em branco, forçamos o nome 'Comercializadora'
+    if "Comercializadora" not in cols:
+        df_precos_globais.rename(columns={cols[0]: "Comercializadora"}, inplace=True)
+        cols = df_precos_globais.columns
+
+    if "Comercializadora" in cols and "Ano" in cols and submercado_selecionado in cols:
+        
+        # Se tiver coluna de Produto, ele filtra. Se não tiver, ignora e puxa tudo (para evitar travar)
+        if "Produto" in cols:
+            mask_filtros = (df_precos_globais["Produto"].astype(str).str.strip().str.upper() == tipo_energia.upper())
+            df_filtrado = df_precos_globais[mask_filtros].sort_values(by=['Comercializadora', 'Ano'])
+        else:
+            df_filtrado = df_precos_globais.sort_values(by=['Comercializadora', 'Ano'])
+            
         comercializadoras = df_filtrado['Comercializadora'].dropna().unique().tolist()
         
         for com in comercializadoras:
             df_com = df_filtrado[df_filtrado['Comercializadora'] == com]
             precos_brutos = df_com[submercado_selecionado].tolist()
+            
             precos_limpos = []
             for p in precos_brutos[:5]: 
-                precos_limpos.append(pd.to_numeric(str(p).replace(',', '.'), errors='coerce'))
+                # Limpeza extrema: tira "R$", tira espaços, tira letras, troca vírgula por ponto.
+                str_p = str(p).upper().replace('R$', '').strip()
+                str_p = re.sub(r'[^\d,.-]', '', str_p)
+                str_p = str_p.replace(',', '.')
+                
+                valor_num = pd.to_numeric(str_p, errors='coerce')
+                # Se ainda assim o valor for inválido, coloca zero em vez de 'None'
+                if pd.isna(valor_num):
+                    valor_num = 0.0
+                    
+                precos_limpos.append(float(valor_num))
+                
             while len(precos_limpos) < 5:
                 precos_limpos.append(precos_limpos[-1] if precos_limpos else 0.0)
             dados_precos_auto[com] = precos_limpos
 
 if not comercializadoras:
-    st.sidebar.warning(f"⚠️ Nenhuma oferta de '{tipo_energia}' cadastrada. Usando valores padrão.")
+    st.sidebar.warning(f"⚠️ Valores não encontrados no arquivo CSV. Usando valores padrão para a simulação.")
     comercializadoras = ["Casa dos Ventos Padrão", "Matrix Padrão"]
     dados_precos_auto = {
         "Casa dos Ventos Padrão": [180.0, 186.0, 192.5, 199.2, 206.1],
@@ -297,7 +325,7 @@ else:
     dados_precos = dados_precos_auto
     with st.sidebar.expander(f"👁️ Curvas '{tipo_energia}' Carregadas (CSV)", expanded=False):
         df_display_sidebar = pd.DataFrame(dados_precos, index=["Ano 1", "Ano 2", "Ano 3", "Ano 4", "Ano 5"]).T
-        st.dataframe(df_display_sidebar)
+        st.dataframe(df_display_sidebar.style.format("R$ {:.2f}"))
 
 componentes = fetch_fatura_data(concessionaria, subgrupo, modalidade)
 
@@ -307,18 +335,14 @@ botao_calcular = st.sidebar.button("🚀 Gerar Proposta Comercial", use_containe
 # --- ÁREA PRINCIPAL DA PLATAFORMA ---
 st.title("⚡ E-Lumia | Hub Solution Intelligence")
 
-# EXIBIÇÃO DO TERMÔMETRO DE MERCADO (PLD SCRAPER)
 pld_dados = buscar_pld_internet()
 if pld_dados:
     st.markdown(f"**Termômetro de Exposição Mercado de Curto Prazo | PLD Médio - {pld_dados['mes_ref']}**")
-    
     pld1, pld2, pld3, pld4 = st.columns(4)
-    
     def formatar_pld(mercado_nome, valor_pld):
         if mercado_nome.upper() == submercado_selecionado.upper():
             return f"📍 {mercado_nome}"
         return mercado_nome
-        
     pld1.metric(formatar_pld("Sudeste", pld_dados['Sudeste']), f"R$ {pld_dados['Sudeste']:,.2f}")
     pld2.metric(formatar_pld("Sul", pld_dados['Sul']), f"R$ {pld_dados['Sul']:,.2f}")
     pld3.metric(formatar_pld("Nordeste", pld_dados['Nordeste']), f"R$ {pld_dados['Nordeste']:,.2f}")
@@ -334,13 +358,11 @@ if botao_calcular:
         imposto_calculado = valor_com_imposto * impostos_totais
         return valor_base, imposto_calculado, valor_com_imposto
 
-    # MOTOR DE CÁLCULO DE DEMANDA (AZUL VS VERDE)
     if modalidade == "Azul":
         _, _, total_demanda_p_cat = decompor_item(demanda_ponta * componentes["tusd_demanda_p"])
         _, _, total_demanda_fp_cat = decompor_item(demanda_fponta * componentes["tusd_demanda_fp"])
         total_demanda_cat = total_demanda_p_cat + total_demanda_fp_cat
         
-        # Desconto de Incentivada se aplica a ambas as TUSDs de Demanda no Livre
         _, _, total_demanda_p_acl = decompor_item(demanda_ponta * componentes["tusd_demanda_p"] * fator_desconto_demanda)
         _, _, total_demanda_fp_acl = decompor_item(demanda_fponta * componentes["tusd_demanda_fp"] * fator_desconto_demanda)
         total_demanda_acl = total_demanda_p_acl + total_demanda_fp_acl
