@@ -20,6 +20,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
+from reportlab.graphics.shapes import Drawing, String
+from reportlab.graphics.charts.piecharts import Pie
 
 # Configuração da página - E-Lumia Executive BI
 st.set_page_config(page_title="E-Lumia | Hub Solution Intelligence", layout="wide", initial_sidebar_state="expanded")
@@ -69,7 +71,6 @@ def buscar_pld_internet():
     }
     
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-    
     try:
         url = "https://ccee.org.br/" 
         response = requests.get(url, headers=headers, timeout=5)
@@ -78,7 +79,6 @@ def buscar_pld_internet():
             pass
     except Exception:
         pass 
-        
     return dados_pld
 
 @st.cache_data
@@ -93,17 +93,15 @@ def load_local_data():
 @st.cache_data(ttl=600)
 def load_precos_data():
     try:
-        # ATIVANDO O PILOTO AUTOMÁTICO DE SEPARADORES (sep=None e engine=python)
-        df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=None, engine='python', encoding='utf-8-sig', on_bad_lines='skip')
-        
-        # Limpa os nomes das colunas
-        df_precos.columns = df_precos.columns.str.strip()
-        
-        # Corrige o nome da coluna Comercializadora caso a célula A1 estivesse vazia no Excel (fica como "Unnamed")
-        cols = df_precos.columns.tolist()
-        if cols and ("Unnamed" in cols[0] or cols[0] == ""):
-            df_precos.rename(columns={cols[0]: "Comercializadora"}, inplace=True)
-            
+        try:
+            df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=';', encoding='utf-8-sig')
+        except:
+            try:
+                df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=',', encoding='utf-8-sig')
+            except:
+                df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=';', encoding='latin1')
+                
+        df_precos.columns = df_precos.columns.str.strip().str.title()
         return df_precos
     except Exception as e:
         return pd.DataFrame()
@@ -247,7 +245,7 @@ consumo_p = consumo_kwh_p / 1000
 consumo_total_mes_kwh = consumo_kwh_fp + consumo_kwh_p
 consumo_total_ano_mwh = (consumo_total_mes_kwh / 1000) * 12
 
-# --- INTEGRAÇÃO DO BANCO DE PREÇOS COM LIMPEZA AGRESSIVA DE DADOS ---
+# --- INTEGRAÇÃO DO BANCO DE PREÇOS ---
 data_atualizacao_csv = "Data Indisponível"
 if os.path.exists(NOME_ARQUIVO_PRECOS):
     timestamp_modificacao = os.path.getmtime(NOME_ARQUIVO_PRECOS)
@@ -262,9 +260,11 @@ dados_precos_auto = {}
 
 if not df_precos_globais.empty:
     cols = df_precos_globais.columns.tolist()
+    if "Comercializadora" not in cols:
+        df_precos_globais.rename(columns={cols[0]: "Comercializadora"}, inplace=True)
+        cols = df_precos_globais.columns.tolist()
 
     if "Comercializadora" in cols and "Ano" in cols and submercado_selecionado in cols:
-        
         if "Produto" in cols:
             mask_filtros = (df_precos_globais["Produto"].astype(str).str.strip().str.upper() == tipo_energia.upper())
             df_filtrado = df_precos_globais[mask_filtros].sort_values(by=['Comercializadora', 'Ano'])
@@ -282,33 +282,16 @@ if not df_precos_globais.empty:
                 str_p = str(p).upper().replace('R$', '').strip()
                 str_p = re.sub(r'[^\d,.-]', '', str_p)
                 str_p = str_p.replace(',', '.')
-                
                 valor_num = pd.to_numeric(str_p, errors='coerce')
-                if pd.isna(valor_num):
-                    valor_num = 0.0
-                    
+                if pd.isna(valor_num): valor_num = 0.0
                 precos_limpos.append(float(valor_num))
                 
             while len(precos_limpos) < 5:
                 precos_limpos.append(precos_limpos[-1] if precos_limpos else 0.0)
             dados_precos_auto[com] = precos_limpos
 
-# SE FALHAR, ABRE A TELA DO DETETIVE
 if not comercializadoras:
     st.sidebar.warning(f"⚠️ Valores não encontrados. Usando padrão.")
-    with st.sidebar.expander("🔍 MODO DETETIVE (Clique para ver o erro)", expanded=False):
-        st.write("**O que o sistema leu do seu CSV:**")
-        if df_precos_globais.empty:
-            st.error("O arquivo está completamente vazio ou corrompido.")
-        else:
-            st.code(list(df_precos_globais.columns))
-            if "Produto" in df_precos_globais.columns:
-                st.write("**Produtos cadastrados no CSV:**")
-                st.code(list(df_precos_globais["Produto"].astype(str).unique()))
-            else:
-                st.error("❌ Não achei a coluna 'Produto' no seu CSV.")
-            st.write(f"**Procurando por:** Coluna '{submercado_selecionado}' | Produto '{tipo_energia}'")
-
     comercializadoras = ["Casa dos Ventos Padrão", "Matrix Padrão"]
     dados_precos_auto = {
         "Casa dos Ventos Padrão": [180.0, 186.0, 192.5, 199.2, 206.1],
@@ -330,10 +313,6 @@ if modo_manual:
             dados_precos[com] = precos_anos
 else:
     dados_precos = dados_precos_auto
-    if not df_precos_globais.empty and comercializadoras != ["Casa dos Ventos Padrão", "Matrix Padrão"]:
-        with st.sidebar.expander(f"👁️ Curvas '{tipo_energia}' Carregadas (CSV)", expanded=False):
-            df_display_sidebar = pd.DataFrame(dados_precos, index=["Ano 1", "Ano 2", "Ano 3", "Ano 4", "Ano 5"]).T
-            st.dataframe(df_display_sidebar.style.format("R$ {:.2f}"))
 
 componentes = fetch_fatura_data(concessionaria, subgrupo, modalidade)
 
@@ -348,8 +327,7 @@ if pld_dados:
     st.markdown(f"**Termômetro de Exposição Mercado de Curto Prazo | PLD Médio - {pld_dados['mes_ref']}**")
     pld1, pld2, pld3, pld4 = st.columns(4)
     def formatar_pld(mercado_nome, valor_pld):
-        if mercado_nome.upper() == submercado_selecionado.upper():
-            return f"📍 {mercado_nome}"
+        if mercado_nome.upper() == submercado_selecionado.upper(): return f"📍 {mercado_nome}"
         return mercado_nome
     pld1.metric(formatar_pld("Sudeste", pld_dados['Sudeste']), f"R$ {pld_dados['Sudeste']:,.2f}")
     pld2.metric(formatar_pld("Sul", pld_dados['Sul']), f"R$ {pld_dados['Sul']:,.2f}")
@@ -411,33 +389,39 @@ if botao_calcular:
     </div>
     """, unsafe_allow_html=True)
 
-    st.subheader(f"🏢 Matriz Global de Ofertas Mapeadas para o Estudo ({tipo_energia})")
-    linhas_matriz_global = []
-    for com in comercializadoras:
-        linhas_matriz_global.append({
-            "Comercializadora": com,
-            "Ano 1": dados_precos[com][0], "Ano 2": dados_precos[com][1],
-            "Ano 3": dados_precos[com][2], "Ano 4": dados_precos[com][3], "Ano 5": dados_precos[com][4],
-        })
-    df_matriz_global_tela = pd.DataFrame(linhas_matriz_global)
-    st.dataframe(df_matriz_global_tela.style.format({
-        "Ano 1": "R$ {:,.2f}", "Ano 2": "R$ {:,.2f}", "Ano 3": "R$ {:,.2f}", "Ano 4": "R$ {:,.2f}", "Ano 5": "R$ {:,.2f}"
-    }), use_container_width=True, hide_index=True)
+    # DATAFRAMES PARA OS GRÁFICOS E TABELAS COM PESO
+    df_cat_peso = pd.DataFrame({
+        "Componente": ["Demanda", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta"],
+        "Valor": [total_demanda_cat, total_tusd_p_cat, total_tusd_fp_cat, total_te_p_cat, total_te_fp_cat]
+    })
+    df_cat_peso = df_cat_peso[df_cat_peso["Valor"] > 0]
+    df_cat_peso["Peso (%)"] = (df_cat_peso["Valor"] / df_cat_peso["Valor"].sum()) * 100
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("#### **Cenário Cativo**")
-        st.dataframe(pd.DataFrame({
-            "Componentes de Custo": ["Demanda (TUSD)", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta"],
-            "Valor": [total_demanda_cat, total_tusd_p_cat, total_tusd_fp_cat, total_te_p_cat, total_te_fp_cat]
-        }).style.format({"Valor": "R$ {:,.2f}"}), hide_index=True, use_container_width=True)
-    with col2:
-        st.markdown(f"#### **Cenário Livre ({melhor_com_mes})**")
-        st.dataframe(pd.DataFrame({
-            "Componentes de Custo": ["Demanda (TUSD c/ Desconto)", "TUSD Ponta", "TUSD F. Ponta", "Contrato Energia", "Gestão E-Lumia"],
-            "Valor": [total_demanda_acl, total_tusd_p_cat, total_tusd_fp_cat, dados_melhor['fatura_energia'], total_gestao_elumia_mes]
-        }).style.format({"Valor": "R$ {:,.2f}"}), hide_index=True, use_container_width=True)
+    df_livre_peso = pd.DataFrame({
+        "Componente": ["Demanda", "TUSD Ponta", "TUSD F. Ponta", "Energia ACL", "Gestão E-Lumia"],
+        "Valor": [total_demanda_acl, total_tusd_p_cat, total_tusd_fp_cat, dados_melhor['fatura_energia'], total_gestao_elumia_mes]
+    })
+    df_livre_peso = df_livre_peso[df_livre_peso["Valor"] > 0]
+    df_livre_peso["Peso (%)"] = (df_livre_peso["Valor"] / df_livre_peso["Valor"].sum()) * 100
 
+    st.subheader("📊 Composição de Custos Mensais (Pizza)")
+    col_g1, col_g2 = st.columns(2)
+    
+    with col_g1:
+        fig_cat = px.pie(df_cat_peso, values='Valor', names='Componente', title="Cenário Cativo (Fatura Atual)", hole=0.4, 
+                         color_discrete_sequence=px.colors.sequential.RdBu)
+        fig_cat.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig_cat, use_container_width=True)
+        st.dataframe(df_cat_peso.style.format({"Valor": "R$ {:,.2f}", "Peso (%)": "{:.1f}%"}), hide_index=True, use_container_width=True)
+
+    with col_g2:
+        fig_liv = px.pie(df_livre_peso, values='Valor', names='Componente', title=f"Cenário Mercado Livre ({melhor_com_mes})", hole=0.4,
+                         color_discrete_sequence=px.colors.sequential.Greens_r)
+        fig_liv.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig_liv, use_container_width=True)
+        st.dataframe(df_livre_peso.style.format({"Valor": "R$ {:,.2f}", "Peso (%)": "{:.1f}%"}), hide_index=True, use_container_width=True)
+
+    # PROJEÇÃO ANUAL
     linhas_proj = []
     anos_reais = int(tempo_contrato / 12)
     custo_cativo_acumulado_total = 0
@@ -455,26 +439,70 @@ if botao_calcular:
         fee_ano = (total_gestao_elumia_mes * 12) * fator_energia_livre
         custo_acl_ano = fatura_resid_ano + fatura_energia_ano + fee_ano
         
+        economia_reais_ano = custo_cativo_ano - custo_acl_ano
+        economia_perc_ano = (economia_reais_ano / custo_cativo_ano) * 100
+        
         custo_cativo_acumulado_total += custo_cativo_ano
         custo_livre_acumulado_total += custo_acl_ano
         
         linhas_proj.append({
             "Período": f"Ano {ano_idx + 1}",
             "Custo Projetado no Cativo": custo_cativo_ano,
-            f"Custo Otimizado ACL ({melhor_com_mes})": custo_acl_ano,
-            "Economia Financeira no Ano": custo_cativo_ano - custo_acl_ano
+            f"Custo Otimizado ACL": custo_acl_ano,
+            "Economia (R$)": economia_reais_ano,
+            "Economia (%)": economia_perc_ano
         })
 
-    st.subheader("📈 Estudo de Longo Prazo Acumulado")
+    st.markdown("---")
+    st.subheader("📈 Simulação de Economia por Ano (Projeção Base Cativo x ACL)")
     df_estudo_integral = pd.DataFrame(linhas_proj)
     st.dataframe(df_estudo_integral.style.format({
-        "Custo Projetado no Cativo": "R$ {:,.2f}", f"Custo Otimizado ACL ({melhor_com_mes})": "R$ {:,.2f}", "Economia Financeira no Ano": "R$ {:,.2f}"
+        "Custo Projetado no Cativo": "R$ {:,.2f}", 
+        "Custo Otimizado ACL": "R$ {:,.2f}", 
+        "Economia (R$)": "R$ {:,.2f}",
+        "Economia (%)": "{:.1f}%"
     }), use_container_width=True, hide_index=True)
 
     k_final1, k_final2, k_final3 = st.columns(3)
     k_final1.metric("Gasto Total no Cativo", f"R$ {custo_cativo_acumulado_total:,.2f}")
     k_final2.metric(f"Gasto Total no ACL ({melhor_com_mes})", f"R$ {custo_livre_acumulado_total:,.2f}")
     k_final3.metric("Patrimônio Recuperado", f"R$ {(custo_cativo_acumulado_total - custo_livre_acumulado_total):,.2f}")
+
+    # FUNÇÃO PARA DESENHAR PIZZA NATIVA NO PDF
+    def draw_pdf_pie(df_peso, title_text):
+        d = Drawing(250, 160)
+        pc = Pie()
+        pc.x = 40
+        pc.y = 20
+        pc.width = 120
+        pc.height = 120
+        pc.data = df_peso['Valor'].tolist()
+        
+        # Cria labels com o nome e a porcentagem
+        rotulos = []
+        for i, row in df_peso.iterrows():
+            rotulos.append(f"{row['Componente']} ({row['Peso (%)']:.1f}%)")
+            
+        pc.labels = rotulos
+        pc.sideLabels = 1
+        pc.slices.strokeWidth = 0.5
+        
+        # Cores para diferenciar Cativo e Livre
+        if "Cativo" in title_text:
+            pc.slices[0].fillColor = colors.HexColor("#ef4444") # Vermelho
+            pc.slices[3].fillColor = colors.HexColor("#f87171") # Vermelho claro
+        else:
+            pc.slices[3].fillColor = colors.HexColor("#22c55e") # Verde
+            pc.slices[4].fillColor = colors.HexColor("#3b82f6") # Azul E-lumia
+            
+        title = String(100, 150, title_text)
+        title.fontName = 'Helvetica-Bold'
+        title.fontSize = 10
+        title.alignment = 'center'
+        
+        d.add(title)
+        d.add(pc)
+        return d
 
     def build_pdf():
         buffer = BytesIO()
@@ -495,53 +523,65 @@ if botao_calcular:
         if nome_cliente or cnpj_input:
             story.append(Paragraph(f"<b>Target Client:</b> {nome_cliente} (CNPJ: {cnpj_input})", bold_style))
             story.append(Paragraph(f"<b>Submercado:</b> {submercado_selecionado} | <b>Produto:</b> {tipo_energia} | <b>Consultor:</b> {vendedor_responsavel}", bold_style))
-            story.append(Spacer(1, 5))
+            story.append(Spacer(1, 10))
 
-        story.append(Paragraph(f"1. Matriz Global de Ofertas Computadas - {tipo_energia} {aviso_modo}", h2_style))
-        pdf_global_matrix_data = [["Fornecedor", "Ano 1", "Ano 2", "Ano 3", "Ano 4", "Ano 5"]]
-        for row in linhas_matriz_global:
-            pdf_global_matrix_data.append([
-                row["Comercializadora"],
-                f"R$ {row['Ano 1']:,.2f}", f"R$ {row['Ano 2']:,.2f}",
-                f"R$ {row['Ano 3']:,.2f}", f"R$ {row['Ano 4']:,.2f}", f"R$ {row['Ano 5']:,.2f}"
-            ])
-        t_global = Table(pdf_global_matrix_data, colWidths=[132, 84, 84, 84, 84, 84])
-        t_global.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-            ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey), ('FONTSIZE', (0,0), (-1,-1), 8),
-        ]))
-        story.append(t_global)
+        story.append(Paragraph("1. Composição de Custos Mensais (Fatura Atual vs Mercado Livre)", h2_style))
+        
+        # Desenha os gráficos nativos do PDF
+        grafico_cativo = draw_pdf_pie(df_cat_peso, "Cenário Cativo")
+        grafico_livre = draw_pdf_pie(df_livre_peso, f"Mercado Livre ({melhor_com_mes})")
+        
+        tabela_graficos = Table([[grafico_cativo, grafico_livre]], colWidths=[270, 270])
+        story.append(tabela_graficos)
+        story.append(Spacer(1, 10))
 
-        story.append(Paragraph("2. Engenharia de Distribuição Mensal (Ano 1)", h2_style))
+        # Tabela Detalhada com Pesos
         pdf_fatura_data = [
-            ["Estrutura de Custo", "Cenário Cativo", f"Cenário Livre ({melhor_com_mes})"],
-            ["Faturamento Distribuidora Fio", f"R$ {(total_demanda_cat+total_tusd_p_cat+total_tusd_fp_cat):,.2f}", f"R$ {fatura_residual_concessionaria_acl:,.2f}"],
-            ["Contrato Consumo Energia", "-", f"R$ {dados_melhor['fatura_energia']:,.2f}"],
-            ["Gestão Hub E-Lumia", "-", f"R$ {total_gestao_elumia_mes:,.2f}"],
-            ["Custo de Desembolso Total", f"R$ {fatura_mensal_cativa:,.2f}", f"R$ {dados_melhor['custo_total_acl']:,.2f}"]
+            ["Estrutura de Custo", "Cenário Cativo", "Peso (%)", f"Mercado Livre ({melhor_com_mes})", "Peso (%)"]
         ]
-        t_fatura = Table(pdf_fatura_data, colWidths=[200, 170, 182])
+        
+        # Prepara um dicionário pra alinhar as linhas na tabela do PDF
+        linhas_custo = ["Demanda", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta", "Energia ACL", "Gestão E-Lumia"]
+        
+        def acha_valor(df, comp):
+            linha = df[df["Componente"] == comp]
+            if not linha.empty:
+                return f"R$ {linha.iloc[0]['Valor']:,.2f}", f"{linha.iloc[0]['Peso (%)']:.1f}%"
+            return "-", "-"
+            
+        for c in linhas_custo:
+            val_cat, peso_cat = acha_valor(df_cat_peso, c)
+            val_liv, peso_liv = acha_valor(df_livre_peso, c)
+            if val_cat != "-" or val_liv != "-":
+                pdf_fatura_data.append([c, val_cat, peso_cat, val_liv, peso_liv])
+                
+        pdf_fatura_data.append(["TOTAL", f"R$ {fatura_mensal_cativa:,.2f}", "100%", f"R$ {dados_melhor['custo_total_acl']:,.2f}", "100%"])
+        
+        t_fatura = Table(pdf_fatura_data, colWidths=[130, 100, 50, 100, 50])
         t_fatura.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
             ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
             ('FONTSIZE', (0,0), (-1,-1), 8), ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#F8FAFC")),
+            ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold')
         ]))
         story.append(t_fatura)
+        story.append(Spacer(1, 15))
 
-        story.append(Paragraph("3. Curva Cronológica de Viabilidade Macroeconômica", h2_style))
-        proj_data = [["Período", "Projeção Cativo", "Projeção Otimizada ACL", "Economia Gerada"]]
+        story.append(Paragraph("2. Simulação de Economia por Ano (Projeção)", h2_style))
+        proj_data = [["Período", "Projeção Cativo", "Projeção Otimizada ACL", "Economia (R$)", "Economia (%)"]]
         for row in linhas_proj:
             proj_data.append([
                 row["Período"], f"R$ {row['Custo Projetado no Cativo']:,.2f}",
-                f"R$ {row[f'Custo Otimizado ACL ({melhor_com_mes})']:,.2f}", f"R$ {row['Economia Financeira no Ano']:,.2f}"
+                f"R$ {row['Custo Otimizado ACL']:,.2f}", f"R$ {row['Economia (R$)']:,.2f}", f"{row['Economia (%)']:.1f}%"
             ])
-        proj_data.append(["ACUMULADO CONTRATUAL", f"R$ {custo_cativo_acumulado_total:,.2f}", f"R$ {custo_livre_acumulado_total:,.2f}", f"R$ {(custo_cativo_acumulado_total - custo_livre_acumulado_total):,.2f}"])
+        proj_data.append(["ACUMULADO TOTAL", f"R$ {custo_cativo_acumulado_total:,.2f}", f"R$ {custo_livre_acumulado_total:,.2f}", f"R$ {(custo_cativo_acumulado_total - custo_livre_acumulado_total):,.2f}", "-"])
         
-        t_proj = Table(proj_data, colWidths=[140, 130, 130, 152])
+        t_proj = Table(proj_data, colWidths=[100, 110, 120, 100, 80])
         t_proj.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
             ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
             ('FONTSIZE', (0,0), (-1,-1), 8), ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#16A34A")), ('TEXTCOLOR', (0,-1), (-1,-1), colors.whitesmoke),
+            ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold')
         ]))
         story.append(t_proj)
 
