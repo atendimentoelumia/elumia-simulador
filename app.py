@@ -291,7 +291,7 @@ if not df_precos_globais.empty:
             dados_precos_auto[com] = precos_limpos
 
 if not comercializadoras:
-    st.sidebar.warning(f"⚠️ Valores não encontrados. Usando padrão.")
+    st.sidebar.warning(f"⚠️ Valores não encontrados no arquivo CSV. Usando padrão.")
     comercializadoras = ["Casa dos Ventos Padrão", "Matrix Padrão"]
     dados_precos_auto = {
         "Casa dos Ventos Padrão": [180.0, 186.0, 192.5, 199.2, 206.1],
@@ -468,7 +468,7 @@ if botao_calcular:
     k_final2.metric(f"Gasto Total no ACL ({melhor_com_mes})", f"R$ {custo_livre_acumulado_total:,.2f}")
     k_final3.metric("Patrimônio Recuperado", f"R$ {(custo_cativo_acumulado_total - custo_livre_acumulado_total):,.2f}")
 
-    # FUNÇÃO PARA DESENHAR PIZZA NATIVA NO PDF
+    # FUNÇÃO PARA DESENHAR PIZZA NATIVA NO PDF (Com correção do textAnchor)
     def draw_pdf_pie(df_peso, title_text):
         d = Drawing(250, 160)
         pc = Pie()
@@ -498,7 +498,7 @@ if botao_calcular:
         title = String(100, 150, title_text)
         title.fontName = 'Helvetica-Bold'
         title.fontSize = 10
-        title.alignment = 'center'
+        title.textAnchor = 'middle' # <--- AQUI ESTÁ A CORREÇÃO!
         
         d.add(title)
         d.add(pc)
