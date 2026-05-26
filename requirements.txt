@@ -6,3 +6,4 @@ plotly
 reportlab
 google-api-python-client
 google-auth
+beautifulsoup4
