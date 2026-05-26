@@ -93,16 +93,17 @@ def load_local_data():
 @st.cache_data(ttl=600)
 def load_precos_data():
     try:
-        try:
-            df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=';', encoding='utf-8-sig')
-        except:
-            try:
-                df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=',', encoding='utf-8-sig')
-            except:
-                df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=';', encoding='latin1')
-                
-        # Força os nomes das colunas para Title Case (Ex: "ano" vira "Ano") e remove espaços
-        df_precos.columns = df_precos.columns.str.strip().str.title()
+        # ATIVANDO O PILOTO AUTOMÁTICO DE SEPARADORES (sep=None e engine=python)
+        df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=None, engine='python', encoding='utf-8-sig', on_bad_lines='skip')
+        
+        # Limpa os nomes das colunas
+        df_precos.columns = df_precos.columns.str.strip()
+        
+        # Corrige o nome da coluna Comercializadora caso a célula A1 estivesse vazia no Excel (fica como "Unnamed")
+        cols = df_precos.columns.tolist()
+        if cols and ("Unnamed" in cols[0] or cols[0] == ""):
+            df_precos.rename(columns={cols[0]: "Comercializadora"}, inplace=True)
+            
         return df_precos
     except Exception as e:
         return pd.DataFrame()
@@ -259,16 +260,9 @@ df_precos_globais = load_precos_data()
 comercializadoras = []
 dados_precos_auto = {}
 
-# MODO DETETIVE INCORPORADO
 if not df_precos_globais.empty:
     cols = df_precos_globais.columns.tolist()
-    
-    # Se a primeira coluna não se chamar Comercializadora, forçamos a renomeação (corrige a imagem B1)
-    if "Comercializadora" not in cols:
-        df_precos_globais.rename(columns={cols[0]: "Comercializadora"}, inplace=True)
-        cols = df_precos_globais.columns.tolist()
 
-    # Verifica se as 3 colunas base estão no arquivo
     if "Comercializadora" in cols and "Ano" in cols and submercado_selecionado in cols:
         
         if "Produto" in cols:
@@ -302,7 +296,7 @@ if not df_precos_globais.empty:
 # SE FALHAR, ABRE A TELA DO DETETIVE
 if not comercializadoras:
     st.sidebar.warning(f"⚠️ Valores não encontrados. Usando padrão.")
-    with st.sidebar.expander("🔍 MODO DETETIVE (Clique para ver o erro)", expanded=True):
+    with st.sidebar.expander("🔍 MODO DETETIVE (Clique para ver o erro)", expanded=False):
         st.write("**O que o sistema leu do seu CSV:**")
         if df_precos_globais.empty:
             st.error("O arquivo está completamente vazio ou corrompido.")
