@@ -90,18 +90,20 @@ def load_local_data():
     except Exception:
         return pd.DataFrame()
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=60) # Tempo menor de cache para facilitar nossos testes
 def load_precos_data():
     try:
-        try:
-            df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=';', encoding='utf-8-sig')
-        except:
-            try:
-                df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=',', encoding='utf-8-sig')
-            except:
-                df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=';', encoding='latin1')
-                
+        # Piloto Automático ativado para tentar ler qualquer separador
+        df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=None, engine='python', encoding='utf-8-sig', on_bad_lines='skip')
+        
+        # Limpeza pesada nas colunas: Tira espaços invisíveis e padroniza tudo
         df_precos.columns = df_precos.columns.str.strip().str.title()
+        
+        # Se a primeira coluna não tiver nome (Unnamed), batiza de Comercializadora
+        cols = df_precos.columns.tolist()
+        if cols and ("Unnamed" in cols[0] or cols[0] == ""):
+            df_precos.rename(columns={cols[0]: "Comercializadora"}, inplace=True)
+            
         return df_precos
     except Exception as e:
         return pd.DataFrame()
@@ -245,7 +247,7 @@ consumo_p = consumo_kwh_p / 1000
 consumo_total_mes_kwh = consumo_kwh_fp + consumo_kwh_p
 consumo_total_ano_mwh = (consumo_total_mes_kwh / 1000) * 12
 
-# --- INTEGRAÇÃO DO BANCO DE PREÇOS ---
+# --- INTEGRAÇÃO DO BANCO DE PREÇOS COM DETETIVE ---
 data_atualizacao_csv = "Data Indisponível"
 if os.path.exists(NOME_ARQUIVO_PRECOS):
     timestamp_modificacao = os.path.getmtime(NOME_ARQUIVO_PRECOS)
@@ -260,12 +262,10 @@ dados_precos_auto = {}
 
 if not df_precos_globais.empty:
     cols = df_precos_globais.columns.tolist()
-    if "Comercializadora" not in cols:
-        df_precos_globais.rename(columns={cols[0]: "Comercializadora"}, inplace=True)
-        cols = df_precos_globais.columns.tolist()
 
     if "Comercializadora" in cols and "Ano" in cols and submercado_selecionado in cols:
         if "Produto" in cols:
+            # Limpa espaços e transforma tudo em maiúsculo para comparar sem erro
             mask_filtros = (df_precos_globais["Produto"].astype(str).str.strip().str.upper() == tipo_energia.upper())
             df_filtrado = df_precos_globais[mask_filtros].sort_values(by=['Comercializadora', 'Ano'])
         else:
@@ -290,8 +290,21 @@ if not df_precos_globais.empty:
                 precos_limpos.append(precos_limpos[-1] if precos_limpos else 0.0)
             dados_precos_auto[com] = precos_limpos
 
+# SE FALHAR, ABRE A TELA DO DETETIVE (AGORA RESTAURADO!)
 if not comercializadoras:
     st.sidebar.warning(f"⚠️ Valores não encontrados no arquivo CSV. Usando padrão.")
+    with st.sidebar.expander("🔍 MODO DETETIVE (Clique aqui)", expanded=True):
+        st.write("**Colunas que eu encontrei:**")
+        st.code(list(df_precos_globais.columns) if not df_precos_globais.empty else "CSV Vazio/Erro")
+        
+        if not df_precos_globais.empty and "Produto" in df_precos_globais.columns:
+            st.write("**Produtos que eu consegui ler:**")
+            st.code(list(df_precos_globais["Produto"].astype(str).unique()))
+        else:
+            st.write("❌ Coluna 'Produto' não foi encontrada.")
+            
+        st.write(f"**Eu estava procurando por:** Submercado='{submercado_selecionado}' | Produto='{tipo_energia}'")
+
     comercializadoras = ["Casa dos Ventos Padrão", "Matrix Padrão"]
     dados_precos_auto = {
         "Casa dos Ventos Padrão": [180.0, 186.0, 192.5, 199.2, 206.1],
@@ -468,7 +481,7 @@ if botao_calcular:
     k_final2.metric(f"Gasto Total no ACL ({melhor_com_mes})", f"R$ {custo_livre_acumulado_total:,.2f}")
     k_final3.metric("Patrimônio Recuperado", f"R$ {(custo_cativo_acumulado_total - custo_livre_acumulado_total):,.2f}")
 
-    # FUNÇÃO PARA DESENHAR PIZZA NATIVA NO PDF (Com correção do textAnchor)
+    # FUNÇÃO PARA DESENHAR PIZZA NATIVA NO PDF 
     def draw_pdf_pie(df_peso, title_text):
         d = Drawing(250, 160)
         pc = Pie()
@@ -478,7 +491,6 @@ if botao_calcular:
         pc.height = 120
         pc.data = df_peso['Valor'].tolist()
         
-        # Cria labels com o nome e a porcentagem
         rotulos = []
         for i, row in df_peso.iterrows():
             rotulos.append(f"{row['Componente']} ({row['Peso (%)']:.1f}%)")
@@ -487,18 +499,17 @@ if botao_calcular:
         pc.sideLabels = 1
         pc.slices.strokeWidth = 0.5
         
-        # Cores para diferenciar Cativo e Livre
         if "Cativo" in title_text:
-            pc.slices[0].fillColor = colors.HexColor("#ef4444") # Vermelho
-            pc.slices[3].fillColor = colors.HexColor("#f87171") # Vermelho claro
+            pc.slices[0].fillColor = colors.HexColor("#ef4444") 
+            pc.slices[3].fillColor = colors.HexColor("#f87171") 
         else:
-            pc.slices[3].fillColor = colors.HexColor("#22c55e") # Verde
-            pc.slices[4].fillColor = colors.HexColor("#3b82f6") # Azul E-lumia
+            pc.slices[3].fillColor = colors.HexColor("#22c55e") 
+            pc.slices[4].fillColor = colors.HexColor("#3b82f6") 
             
         title = String(100, 150, title_text)
         title.fontName = 'Helvetica-Bold'
         title.fontSize = 10
-        title.textAnchor = 'middle' # <--- AQUI ESTÁ A CORREÇÃO!
+        title.textAnchor = 'middle' 
         
         d.add(title)
         d.add(pc)
@@ -527,7 +538,6 @@ if botao_calcular:
 
         story.append(Paragraph("1. Composição de Custos Mensais (Fatura Atual vs Mercado Livre)", h2_style))
         
-        # Desenha os gráficos nativos do PDF
         grafico_cativo = draw_pdf_pie(df_cat_peso, "Cenário Cativo")
         grafico_livre = draw_pdf_pie(df_livre_peso, f"Mercado Livre ({melhor_com_mes})")
         
@@ -535,12 +545,10 @@ if botao_calcular:
         story.append(tabela_graficos)
         story.append(Spacer(1, 10))
 
-        # Tabela Detalhada com Pesos
         pdf_fatura_data = [
             ["Estrutura de Custo", "Cenário Cativo", "Peso (%)", f"Mercado Livre ({melhor_com_mes})", "Peso (%)"]
         ]
         
-        # Prepara um dicionário pra alinhar as linhas na tabela do PDF
         linhas_custo = ["Demanda", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta", "Energia ACL", "Gestão E-Lumia"]
         
         def acha_valor(df, comp):
