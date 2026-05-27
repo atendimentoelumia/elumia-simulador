@@ -24,7 +24,7 @@ from reportlab.graphics.shapes import Drawing, String
 from reportlab.graphics.charts.piecharts import Pie
 
 # Configuração da página - E-Lumia Executive BI
-st.set_page_config(page_title="E-Lumia | Hub Solution Intelligence", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="E-Lumia | Energia Inteligente", layout="wide", initial_sidebar_state="expanded")
 
 # CSS Ajustado para Dark Mode Premium
 st.markdown("""
@@ -244,7 +244,7 @@ if ambiente_atual == "Mercado Livre":
 else:
     preco_energia_atual_livre = 0.0
 
-fee_elumia_mwh = st.sidebar.number_input("Gestão Executiva E-Lumia (R$/MWh)", value=6.00, format="%.2f")
+fee_elumia_mwh = st.sidebar.number_input("Gestão Executiva E-Lumia (R$/MWh)", value=20.00, format="%.2f")
 
 consumo_fp = consumo_kwh_fp / 1000
 consumo_p = consumo_kwh_p / 1000
@@ -348,12 +348,12 @@ linhas_matriz_global = []
 for com in comercializadoras:
     linhas_matriz_global.append({
         "Comercializadora": com,
-        "Ano 1 (R$/MWh)": dados_precos[com][0], "Ano 2 (R$/MWh)": dados_precos[com][1],
-        "Ano 3 (R$/MWh)": dados_precos[com][2], "Ano 4 (R$/MWh)": dados_precos[com][3], "Ano 5 (R$/MWh)": dados_precos[com][4],
+        "2026 (R$/MWh)": dados_precos[com][0], "2027 (R$/MWh)": dados_precos[com][1],
+        "2028 (R$/MWh)": dados_precos[com][2], "2029 (R$/MWh)": dados_precos[com][3], "2030 (R$/MWh)": dados_precos[com][4],
     })
 df_matriz_global_tela = pd.DataFrame(linhas_matriz_global)
 st.dataframe(df_matriz_global_tela.style.format({
-    "Ano 1 (R$/MWh)": "R$ {:,.2f}", "Ano 2 (R$/MWh)": "R$ {:,.2f}", "Ano 3 (R$/MWh)": "R$ {:,.2f}", "Ano 4 (R$/MWh)": "R$ {:,.2f}", "Ano 5 (R$/MWh)": "R$ {:,.2f}"
+    "2026 (R$/MWh)": "R$ {:,.2f}", "2027 (R$/MWh)": "R$ {:,.2f}", "2028 (R$/MWh)": "R$ {:,.2f}", "2029 (R$/MWh)": "R$ {:,.2f}", "2030 (R$/MWh)": "R$ {:,.2f}"
 }), use_container_width=True, hide_index=True)
 
 if botao_calcular:
