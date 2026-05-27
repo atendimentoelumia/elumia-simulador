@@ -251,6 +251,14 @@ consumo_total_mes_kwh = consumo_kwh_fp + consumo_kwh_p
 consumo_total_ano_mwh = (consumo_total_mes_kwh / 1000) * 12
 
 # --- INTEGRAÇÃO DO BANCO DE PREÇOS ---
+data_atualizacao_csv = "Data Indisponível"
+if os.path.exists(NOME_ARQUIVO_PRECOS):
+    timestamp_modificacao = os.path.getmtime(NOME_ARQUIVO_PRECOS)
+    data_atualizacao_csv = datetime.fromtimestamp(timestamp_modificacao).strftime('%d/%m/%Y às %H:%M')
+
+st.sidebar.subheader("🏢 Ofertas em Vigor")
+st.sidebar.caption(f"🔄 **Última atualização:** {data_atualizacao_csv}")
+
 df_precos_globais = load_precos_data()
 comercializadoras = []
 dados_precos_auto = {}
@@ -333,7 +341,7 @@ if pld_dados:
 nome_cenario_base = "Cenário Cativo (Fatura Atual)" if ambiente_atual == "Mercado Cativo" else "Cenário Atual (Mercado Livre)"
 st.markdown(f"## Estudo Comparativo de Faturamento: {nome_cenario_base.split(' (')[0]} vs. Proposta E-Lumia")
 
-# 1. EXIBIÇÃO DA MATRIZ GLOBAL DE OFERTAS (AGORA COM NOMES DE ANOS REAIS)
+# 1. EXIBIÇÃO DA MATRIZ GLOBAL DE OFERTAS
 st.subheader(f"🏢 Matriz Global de Ofertas Mapeadas para o Estudo ({tipo_energia})")
 linhas_matriz_global = []
 for com in comercializadoras:
@@ -388,7 +396,6 @@ if botao_calcular:
     fatura_residual_concessionaria_acl = total_demanda_acl + total_tusd_p_cat + total_tusd_fp_cat
     _, _, total_gestao_elumia_mes = decompor_item((consumo_total_mes_kwh / 1000) * fee_elumia_mwh)
 
-    # CÁLCULOS MULTI-FORNECEDOR PARA A TABELA COMPARATIVA
     anos_reais = int(tempo_contrato / 12)
     dados_comparativo_fornecedores = []
 
@@ -473,7 +480,7 @@ if botao_calcular:
         df_livre_peso_tela = pd.concat([df_livre_peso, pd.DataFrame([{"Componente": "SOMA DA FATURA (TOTAL)", "Valor": custo_total_acl_melhor_mes, "Peso (%)": 100.0}])], ignore_index=True)
         st.dataframe(df_livre_peso_tela.style.format({"Valor": "R$ {:,.2f}", "Peso (%)": "{:.1f}%"}), hide_index=True, use_container_width=True)
 
-    # 2. PROJEÇÃO DE MÉDIAS MENSAIS POR ANO (MUDADO PARA NOMES DE ANOS REAIS)
+    # 2. PROJEÇÃO DE MÉDIAS MENSAIS POR ANO
     linhas_proj_mensal = []
     custo_atual_acumulado_total = 0
     custo_livre_acumulado_total = 0
@@ -591,7 +598,6 @@ if botao_calcular:
             story.append(Paragraph(f"<b>Submercado:</b> {submercado_selecionado} | <b>Produto:</b> {tipo_energia} | <b>Consultor:</b> {vendedor_responsavel}", styles['Normal']))
             story.append(Spacer(1, 10))
 
-        # Tabela 1: Matriz Global com anos reais
         story.append(Paragraph("1. Matriz Global de Ofertas Mapeadas (Anual)", h2_style))
         pdf_matriz_data = [["Comercializadora", "2026", "2027", "2028", "2029", "2030"]]
         for row in linhas_matriz_global:
@@ -620,7 +626,7 @@ if botao_calcular:
         
         def acha_valor(df, comp):
             linha = df[df["Componente"] == comp]
-            if not linen := linha.empty: return f"R$ {linha.iloc[0]['Valor']:,.2f}", f"{linha.iloc[0]['Peso (%)']:.1f}%"
+            if not linha.empty: return f"R$ {linha.iloc[0]['Valor']:,.2f}", f"{linha.iloc[0]['Peso (%)']:.1f}%"
             return "-", "-"
             
         for c in linhas_custo:
