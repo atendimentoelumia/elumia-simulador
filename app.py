@@ -398,9 +398,7 @@ if botao_calcular:
             "Valor": [total_demanda_cat, total_tusd_p_cat, total_tusd_fp_cat, total_te_p_cat, total_te_fp_cat]
         })
     else: 
-        # Custo Cativo Simulado para Bandeiras
         fatura_mensal_cativa = total_demanda_cat + total_tusd_p_cat + total_tusd_fp_cat + total_te_p_cat + total_te_fp_cat
-        
         _, _, total_energia_atual_concorrente = decompor_item((consumo_total_mes_kwh / 1000) * preco_energia_atual_livre)
         fatura_mensal_atual = total_demanda_acl + total_tusd_p_cat + total_tusd_fp_cat + total_energia_atual_concorrente
         df_atual_peso = pd.DataFrame({
@@ -632,39 +630,63 @@ if botao_calcular:
 
     def build_pdf():
         buffer = BytesIO()
-        # Formato da Página: Paisagem (Landscape) para mais espaço (Largura útil de ~732 pixels)
         doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
         styles = getSampleStyleSheet()
         
-        # CABEÇALHO DO PDF (Com Logo)
-        header_data = []
-        # Tenta carregar a imagem da logo se existir na pasta. Se não, usa um texto Premium da Marca
+        # Estilos de Texto do PDF
+        title_style_left = ParagraphStyle('TitleStyleLeft', fontName='Helvetica-Bold', fontSize=16, textColor=colors.HexColor("#1A365D"), alignment=2)
+        h2_style = ParagraphStyle('H2Style', parent=styles['Heading2'], fontSize=11, textColor=colors.HexColor("#1E3A8A"), spaceBefore=12, spaceAfter=6, fontName='Helvetica-Bold')
+        card_style = ParagraphStyle('Card', fontSize=12, textColor=colors.whitesmoke, alignment=1)
+        
+        story = []
+        
+        # 1. HEADER (Logo + Título)
         if os.path.exists("logo.png"):
-            logo_img = Image("logo.png", width=120, height=40)
-            logo_element = logo_img
+            logo_element = Image("logo.png", width=120, height=40)
         else:
             logo_style = ParagraphStyle('LogoStyle', fontName='Helvetica-Bold', fontSize=18, textColor=colors.HexColor("#3B82F6"))
             logo_element = Paragraph("⚡ E-LUMIA", logo_style)
             
-        title_style_left = ParagraphStyle('TitleStyleLeft', fontName='Helvetica-Bold', fontSize=16, textColor=colors.HexColor("#1A365D"), alignment=2)
         title_p = Paragraph("PROPOSTA EXECUTIVA - MERCADO LIVRE DE ENERGIA", title_style_left)
-        
         header_table = Table([[logo_element, title_p]], colWidths=[200, 532])
-        header_table.setStyle(TableStyle([
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-            ('ALIGN', (1,0), (1,0), 'RIGHT'),
-        ]))
-        
-        h2_style = ParagraphStyle('H2Style', parent=styles['Heading2'], fontSize=11, textColor=colors.HexColor("#1E3A8A"), spaceBefore=12, spaceAfter=6, fontName='Helvetica-Bold')
-        
-        story = []
+        header_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (1,0), (1,0), 'RIGHT')]))
         story.append(header_table)
         story.append(Spacer(1, 15))
         
+        # 2. TERMÔMETRO PLD (Igual à tela)
+        if pld_dados:
+            story.append(Paragraph(f"Termômetro de Exposição Mercado de Curto Prazo | PLD Médio - {pld_dados['mes_ref']}", h2_style))
+            pld_headers = [formatar_pld("Sudeste", 0), formatar_pld("Sul", 0), formatar_pld("Nordeste", 0), formatar_pld("Norte", 0)]
+            pld_values = [moeda_br(pld_dados['Sudeste']), moeda_br(pld_dados['Sul']), moeda_br(pld_dados['Nordeste']), moeda_br(pld_dados['Norte'])]
+            t_pld = Table([pld_headers, pld_values], colWidths=[183, 183, 183, 183])
+            t_pld.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#1E293B")),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor("#94A3B8")),
+                ('TEXTCOLOR', (0,1), (-1,1), colors.whitesmoke),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('FONTNAME', (0,1), (-1,1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0,1), (-1,1), 12),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+                ('TOPPADDING', (0,0), (-1,-1), 8),
+                ('GRID', (0,0), (-1,-1), 1, colors.HexColor("#334155"))
+            ]))
+            story.append(t_pld)
+            story.append(Spacer(1, 15))
+
+        # 3. CARD DE DIAGNÓSTICO EXECUTIVO (Igual à tela)
         if nome_cliente or cnpj_input:
-            story.append(Paragraph(f"<b>Target Client:</b> {nome_cliente} (CNPJ: {cnpj_input})", styles['Normal']))
-            story.append(Paragraph(f"<b>Submercado:</b> {submercado_selecionado} | <b>Produto:</b> {tipo_energia} | <b>Consultor:</b> {vendedor_responsavel}", styles['Normal']))
-            story.append(Spacer(1, 10))
+            card_text = f"<font color='#3B82F6'><b>DIAGNÓSTICO COMERCIAL EXECUTIVO</b></font><br/><br/>Parceiro mais competitivo selecionado para <b>{nome_cliente}</b> no Submercado <b>{submercado_selecionado}</b> para o produto <b>{tipo_energia}</b>:<br/><b>{melhor_com_mes}</b> com economia de <b>{perc_br(economia_mes_1_perc)}</b> em 2026.<br/><br/><font size='10' color='#94A3B8'>Consultor Responsável: {vendedor_responsavel}</font>"
+            t_card = Table([[Paragraph(card_text, card_style)]], colWidths=[732])
+            t_card.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#1E293B")),
+                ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('TOPPADDING', (0,0), (-1,-1), 15),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 15),
+                ('LINEBEFORE', (0,0), (0,-1), 6, colors.HexColor("#3B82F6"))
+            ]))
+            story.append(t_card)
+            story.append(Spacer(1, 15))
 
         # Tabela 1: Matriz de Ofertas - Total de largura: 732
         story.append(Paragraph("1. Matriz Global de Ofertas Mapeadas (Anual)", h2_style))
@@ -683,7 +705,7 @@ if botao_calcular:
         story.append(t_matriz)
         story.append(Spacer(1, 10))
 
-        # Tabelas e Gráficos de Composição de Custos - Espaçamento bem distribuído no Landscape
+        # Tabelas e Gráficos de Composição de Custos
         story.append(Paragraph(f"2. Composição de Custos Mensais ({nome_cenario_base} vs Proposta)", h2_style))
         grafico_cativo = draw_pdf_pie(df_atual_peso, nome_cenario_base)
         grafico_livre = draw_pdf_pie(df_livre_peso, f"Proposta E-Lumia")
@@ -716,7 +738,7 @@ if botao_calcular:
         story.append(t_fatura)
         story.append(Spacer(1, 15))
 
-        # Tabela 3: Cronológico - Largura Total 732
+        # Tabela 3: Cronológico
         story.append(Paragraph("3. Estudo Cronológico: Média Mensal Paga por Ano", h2_style))
         proj_data = [["Ano", "Média Mensal Base Atual", "Média Mensal Proposta", "Economia Mês (R$)", "Economia (%)"]]
         for row in linhas_proj_mensal:
@@ -734,7 +756,7 @@ if botao_calcular:
         story.append(t_proj)
         story.append(Spacer(1, 15))
 
-        # Tabela 4: Bandeiras - Largura Total 732
+        # Tabela 4: Bandeiras
         story.append(Paragraph("4. Blindagem contra Bandeiras Tarifárias", h2_style))
         pdf_bandeiras_data = [["Cenário Hídrico", "Cativo Projetado", f"Proposta E-Lumia", "Economia (R$)", "Economia (%)"]]
         for row in linhas_bandeiras:
@@ -752,7 +774,7 @@ if botao_calcular:
         story.append(t_band)
         story.append(Spacer(1, 15))
 
-        # Tabela 5: Fornecedores - Largura Total 732
+        # Tabela 5: Fornecedores
         story.append(Paragraph("5. Comparativo de Viabilidade por Comercializadora", h2_style))
         pdf_com_forn_data = [["Comercializadora", "Média Econ. Mês", "Média Econ. Ano", "Total Contrato"]]
         for r_com in dados_comparativo_fornecedores:
@@ -766,6 +788,24 @@ if botao_calcular:
             ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey), ('FONTSIZE', (0,0), (-1,-1), 9),
         ]))
         story.append(t_forn)
+        story.append(Spacer(1, 20))
+
+        # 6. KPIS FINAIS DO RODAPÉ (Igual à tela)
+        kpi_headers = [f"Gasto Acumulado ({ambiente_atual})", f"Gasto Acumulado E-Lumia", "Patrimônio Total Recuperado"]
+        kpi_values = [moeda_br(custo_atual_acumulado_total), moeda_br(custo_livre_acumulado_total), moeda_br(custo_atual_acumulado_total - custo_livre_acumulado_total)]
+        t_kpi = Table([kpi_headers, kpi_values], colWidths=[244, 244, 244])
+        t_kpi.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#0F172A")),
+            ('BACKGROUND', (0,1), (-1,1), colors.HexColor("#1E293B")),
+            ('TEXTCOLOR', (0,0), (-1,-1), colors.whitesmoke),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('FONTNAME', (0,1), (-1,1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,1), (-1,1), 14),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 10),
+            ('TOPPADDING', (0,0), (-1,-1), 10),
+            ('GRID', (0,0), (-1,-1), 2, colors.white)
+        ]))
+        story.append(t_kpi)
 
         doc.build(story)
         buffer.seek(0)
