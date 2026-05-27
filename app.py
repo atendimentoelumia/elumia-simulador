@@ -182,6 +182,9 @@ st.sidebar.markdown("---")
 
 st.sidebar.header("🎯 Qualificação do Cliente")
 
+# --- NOVO: SELETOR DE AMBIENTE (CATIVO VS LIVRE) ---
+ambiente_atual = st.sidebar.radio("Ambiente Atual do Cliente", ["Mercado Cativo", "Mercado Livre"])
+
 if "nome_cliente_auto" not in st.session_state:
     st.session_state.nome_cliente_auto = ""
 
@@ -234,6 +237,13 @@ else:
 
 consumo_kwh_fp = st.sidebar.number_input("Consumo Fora Ponta (kWh/mês)", value=120000.0, step=5000.0)
 consumo_kwh_p = st.sidebar.number_input("Consumo Ponta (kWh/mês)", value=15000.0, step=1000.0)
+
+# --- NOVO: INPUT DE PREÇO DO CONCORRENTE SE FOR MERCADO LIVRE ---
+if ambiente_atual == "Mercado Livre":
+    preco_energia_atual_livre = st.sidebar.number_input("Preço Atual da Energia no Concorrente (R$/MWh)", value=250.00, format="%.2f")
+else:
+    preco_energia_atual_livre = 0.0
+
 fee_elumia_mwh = st.sidebar.number_input("Gestão Executiva E-Lumia (R$/MWh)", value=6.00, format="%.2f")
 
 consumo_fp = consumo_kwh_fp / 1000
@@ -329,9 +339,10 @@ if pld_dados:
     pld4.metric(formatar_pld("Norte", pld_dados['Norte']), f"R$ {pld_dados['Norte']:,.2f}")
     st.markdown("---")
 
-st.markdown("## Estudo Comparativo de Faturamento: Cativo vs. Mercado Livre")
+nome_cenario_base = "Cenário Cativo (Fatura Atual)" if ambiente_atual == "Mercado Cativo" else "Cenário Atual (Mercado Livre)"
+st.markdown(f"## Estudo Comparativo de Faturamento: {nome_cenario_base.split(' (')[0]} vs. Proposta E-Lumia")
 
-# 1. EXIBIÇÃO DA MATRIZ GLOBAL DE OFERTAS
+# EXIBIÇÃO DA MATRIZ GLOBAL DE OFERTAS
 st.subheader(f"🏢 Matriz Global de Ofertas Mapeadas para o Estudo ({tipo_energia})")
 linhas_matriz_global = []
 for com in comercializadoras:
@@ -352,6 +363,7 @@ if botao_calcular:
         imposto_calculado = valor_com_imposto * impostos_totais
         return valor_base, imposto_calculado, valor_com_imposto
 
+    # CALCULA DISTRIBUIÇÃO
     if modalidade == "Azul":
         _, _, total_demanda_p_cat = decompor_item(demanda_ponta * componentes["tusd_demanda_p"])
         _, _, total_demanda_fp_cat = decompor_item(demanda_fponta * componentes["tusd_demanda_fp"])
@@ -369,7 +381,21 @@ if botao_calcular:
     _, _, total_te_p_cat = decompor_item(consumo_p * componentes["te_p"])
     _, _, total_te_fp_cat = decompor_item(consumo_fp * componentes["te_fp"])
 
-    fatura_mensal_cativa = total_demanda_cat + total_tusd_p_cat + total_tusd_fp_cat + total_te_p_cat + total_te_fp_cat
+    # MOTOR INTELIGENTE: CATIVO OU LIVRE ATUAL
+    if ambiente_atual == "Mercado Cativo":
+        fatura_mensal_atual = total_demanda_cat + total_tusd_p_cat + total_tusd_fp_cat + total_te_p_cat + total_te_fp_cat
+        df_atual_peso = pd.DataFrame({
+            "Componente": ["Demanda", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta"],
+            "Valor": [total_demanda_cat, total_tusd_p_cat, total_tusd_fp_cat, total_te_p_cat, total_te_fp_cat]
+        })
+    else: # Livre Atual
+        _, _, total_energia_atual_concorrente = decompor_item((consumo_total_mes_kwh / 1000) * preco_energia_atual_livre)
+        fatura_mensal_atual = total_demanda_acl + total_tusd_p_cat + total_tusd_fp_cat + total_energia_atual_concorrente
+        df_atual_peso = pd.DataFrame({
+            "Componente": ["Demanda (TUSD c/ Desc)", "TUSD Ponta", "TUSD F. Ponta", "Energia Atual Concorrente"],
+            "Valor": [total_demanda_acl, total_tusd_p_cat, total_tusd_fp_cat, total_energia_atual_concorrente]
+        })
+
     fatura_residual_concessionaria_acl = total_demanda_acl + total_tusd_p_cat + total_tusd_fp_cat
     _, _, total_gestao_elumia_mes = decompor_item((consumo_total_mes_kwh / 1000) * fee_elumia_mwh)
 
@@ -383,50 +409,60 @@ if botao_calcular:
             fator_distribuidora = (1 + 0.08) ** ano_idx
             fator_energia_livre = (1 + 0.06) ** ano_idx
             
-            c_cativo = (fatura_mensal_cativa * 12) * fator_distribuidora
-            p_inflacionado = dados_precos[com][ano_idx] * fator_energia_livre
-            _, _, fat_energia_ano_com = decompor_item(consumo_total_ano_mwh * p_inflacionado)
+            # Custo Atual Inflacionado (Cativo ou Livre do Concorrente)
+            if ambiente_atual == "Mercado Cativo":
+                custo_atual_projetado_ano = (fatura_mensal_atual * 12) * fator_distribuidora
+            else:
+                p_inflacionado_concorrente = preco_energia_atual_livre * fator_energia_livre
+                _, _, fat_energia_ano_concorrente = decompor_item(consumo_total_ano_mwh * p_inflacionado_concorrente)
+                custo_atual_projetado_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_concorrente
             
-            c_livre = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_com + ((total_gestao_elumia_mes * 12) * fator_energia_livre)
-            soma_economia_contrato += (c_cativo - c_livre)
+            # Custo Proposto E-Lumia Inflacionado
+            p_inflacionado_elumia = dados_precos[com][ano_idx] * fator_energia_livre
+            _, _, fat_energia_ano_elumia = decompor_item(consumo_total_ano_mwh * p_inflacionado_elumia)
+            custo_proposto_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_elumia + ((total_gestao_elumia_mes * 12) * fator_energia_livre)
+            
+            soma_economia_contrato += (custo_atual_projetado_ano - custo_proposto_ano)
             
         eco_media_ano = soma_economia_contrato / (tempo_contrato / 12)
         eco_media_mes = eco_media_ano / 12
         
+        # Para achar a melhor de todas no Mês 1
+        preco_ano1 = dados_precos[com][0]
+        _, _, tot_eng = decompor_item((consumo_total_mes_kwh / 1000) * preco_ano1)
+        c_livre_mes_1 = fatura_residual_concessionaria_acl + tot_eng + total_gestao_elumia_mes
+
         dados_comparativo_fornecedores.append({
             "Comercializadora": com,
             "Economia Média Mês (R$)": eco_media_mes,
             "Economia Média Ano (R$)": eco_media_ano,
             "Economia Total Contrato (R$)": soma_economia_contrato,
-            "Custo_Total_Ordenacao": c_livre # Auxiliar para achar a mais barata
+            "Custo_Total_Ordenacao": c_livre_mes_1 
         })
 
-    melhor_fornecedor_row = max(dados_comparativo_fornecedores, key=lambda x: x["Economia Total Contrato (R$)"])
+    melhor_fornecedor_row = min(dados_comparativo_fornecedores, key=lambda x: x["Custo_Total_Ordenacao"])
     melhor_com_mes = melhor_fornecedor_row["Comercializadora"]
 
-    preco_ano1 = dados_precos[melhor_com_mes][0]
-    _, _, total_energia_mes_melhor = decompor_item((consumo_total_mes_kwh / 1000) * preco_ano1)
+    preco_ano1_melhor = dados_precos[melhor_com_mes][0]
+    _, _, total_energia_mes_melhor = decompor_item((consumo_total_mes_kwh / 1000) * preco_ano1_melhor)
     custo_total_acl_melhor_mes = fatura_residual_concessionaria_acl + total_energia_mes_melhor + total_gestao_elumia_mes
+    
+    economia_mes_1_perc = ((fatura_mensal_atual - custo_total_acl_melhor_mes) / fatura_mensal_atual) * 100
 
     saudacao = f"para <b>{nome_cliente}</b>" if nome_cliente else ""
     st.markdown(f"""
     <div class="card-vendas">
         <span style="font-size:20px; font-weight:bold; color:#3B82F6;">📈 Diagnóstico Comercial Executivo Gerado com Sucesso!</span><br/>
-        Parceiro mais competitivo selecionado {saudacao} no Submercado {submercado_selecionado} para o produto <b>{tipo_energia}</b>: <b>{melhor_com_mes}</b> com economia de <b>{((fatura_mensal_cativa - custo_total_acl_melhor_mes)/fatura_mensal_cativa)*100:.1f}%</b> no Ano 1.<br/>
+        Parceiro mais competitivo selecionado {saudacao} no Submercado {submercado_selecionado} para o produto <b>{tipo_energia}</b>: <b>{melhor_com_mes}</b> com economia de <b>{economia_mes_1_perc:.1f}%</b> no Ano 1.<br/>
         <span style="font-size:14px; color:#94A3B8;">Consultor Responsável: {vendedor_responsavel}</span>
     </div>
     """, unsafe_allow_html=True)
 
-    # DATAFRAMES PARA OS GRÁFICOS E TABELAS COM PESO
-    df_cat_peso = pd.DataFrame({
-        "Componente": ["Demanda", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta"],
-        "Valor": [total_demanda_cat, total_tusd_p_cat, total_tusd_fp_cat, total_te_p_cat, total_te_fp_cat]
-    })
-    df_cat_peso = df_cat_peso[df_cat_peso["Valor"] > 0]
-    df_cat_peso["Peso (%)"] = (df_cat_peso["Valor"] / df_cat_peso["Valor"].sum()) * 100
+    df_atual_peso = df_atual_peso[df_atual_peso["Valor"] > 0].copy()
+    df_atual_peso["Peso (%)"] = (df_atual_peso["Valor"] / df_atual_peso["Valor"].sum()) * 100
 
     df_livre_peso = pd.DataFrame({
-        "Componente": ["Demanda", "TUSD Ponta", "TUSD F. Ponta", "Energia ACL", "Gestão E-Lumia"],
+        "Componente": ["Demanda (TUSD c/ Desc)", "TUSD Ponta", "TUSD F. Ponta", "Energia Proposta ACL", "Gestão E-Lumia"],
         "Valor": [total_demanda_acl, total_tusd_p_cat, total_tusd_fp_cat, total_energia_mes_melhor, total_gestao_elumia_mes]
     })
     df_livre_peso = df_livre_peso[df_livre_peso["Valor"] > 0]
@@ -436,68 +472,71 @@ if botao_calcular:
     col_g1, col_g2 = st.columns(2)
     
     with col_g1:
-        fig_cat = px.pie(df_cat_peso, values='Valor', names='Componente', title="Cenário Cativo (Fatura Atual)", hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
+        fig_cat = px.pie(df_atual_peso, values='Valor', names='Componente', title=nome_cenario_base, hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
         fig_cat.update_traces(textposition='inside', textinfo='percent+label')
         st.plotly_chart(fig_cat, use_container_width=True)
         
-        # Adiciona linha de TOTAL na tabela da tela
-        df_cat_peso_tela = pd.concat([df_cat_peso, pd.DataFrame([{"Componente": "SOMA DA FATURA (TOTAL)", "Valor": fatura_mensal_cativa, "Peso (%)": 100.0}])], ignore_index=True)
-        st.dataframe(df_cat_peso_tela.style.format({"Valor": "R$ {:,.2f}", "Peso (%)": "{:.1f}%"}), hide_index=True, use_container_width=True)
+        df_atual_peso_tela = pd.concat([df_atual_peso, pd.DataFrame([{"Componente": "SOMA DA FATURA (TOTAL)", "Valor": fatura_mensal_atual, "Peso (%)": 100.0}])], ignore_index=True)
+        st.dataframe(df_atual_peso_tela.style.format({"Valor": "R$ {:,.2f}", "Peso (%)": "{:.1f}%"}), hide_index=True, use_container_width=True)
 
     with col_g2:
-        fig_liv = px.pie(df_livre_peso, values='Valor', names='Componente', title=f"Cenário Mercado Livre ({melhor_com_mes})", hole=0.4, color_discrete_sequence=px.colors.sequential.Greens_r)
+        fig_liv = px.pie(df_livre_peso, values='Valor', names='Componente', title=f"Proposta E-Lumia ({melhor_com_mes})", hole=0.4, color_discrete_sequence=px.colors.sequential.Greens_r)
         fig_liv.update_traces(textposition='inside', textinfo='percent+label')
         st.plotly_chart(fig_liv, use_container_width=True)
         
-        # Adiciona linha de TOTAL na tabela da tela
         df_livre_peso_tela = pd.concat([df_livre_peso, pd.DataFrame([{"Componente": "SOMA DA FATURA (TOTAL)", "Valor": custo_total_acl_melhor_mes, "Peso (%)": 100.0}])], ignore_index=True)
         st.dataframe(df_livre_peso_tela.style.format({"Valor": "R$ {:,.2f}", "Peso (%)": "{:.1f}%"}), hide_index=True, use_container_width=True)
 
-    # 2. PROJEÇÃO DE MÉDIAS MENSAIS POR ANO (SOLICITADO)
+    # 2. PROJEÇÃO DE MÉDIAS MENSAIS POR ANO 
     linhas_proj_mensal = []
-    custo_cativo_acumulado_total = 0
+    custo_atual_acumulado_total = 0
     custo_livre_acumulado_total = 0
 
     for ano_idx in range(anos_reais):
         fator_distribuidora = (1 + 0.08) ** ano_idx
         fator_energia_livre = (1 + 0.06) ** ano_idx
         
-        custo_cativo_ano = (fatura_mensal_cativa * 12) * fator_distribuidora
-        preco_com_inflacao = dados_precos[melhor_com_mes][ano_idx] * fator_energia_livre
-        _, _, fatura_energia_ano = decompor_item(consumo_total_ano_mwh * preco_com_inflacao)
+        if ambiente_atual == "Mercado Cativo":
+            custo_atual_projetado_ano = (fatura_mensal_atual * 12) * fator_distribuidora
+        else:
+            p_inflacionado_concorrente = preco_energia_atual_livre * fator_energia_livre
+            _, _, fat_energia_ano_concorrente = decompor_item(consumo_total_ano_mwh * p_inflacionado_concorrente)
+            custo_atual_projetado_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_concorrente
+            
+        preco_com_inflacao_elumia = dados_precos[melhor_com_mes][ano_idx] * fator_energia_livre
+        _, _, fatura_energia_ano_elumia = decompor_item(consumo_total_ano_mwh * preco_com_inflacao_elumia)
         
         fatura_resid_ano = (fatura_residual_concessionaria_acl * 12) * fator_distribuidora
         fee_ano = (total_gestao_elumia_mes * 12) * fator_energia_livre
-        custo_acl_ano = fatura_resid_ano + fatura_energia_ano + fee_ano
+        custo_proposto_ano = fatura_resid_ano + fatura_energia_ano_elumia + fee_ano
         
-        custo_cativo_acumulado_total += custo_cativo_ano
-        custo_livre_acumulado_total += custo_acl_ano
+        custo_atual_acumulado_total += custo_atual_projetado_ano
+        custo_livre_acumulado_total += custo_proposto_ano
         
-        # Média Mensal Paga no Ano
-        pago_mensal_cativo = custo_cativo_ano / 12
-        pago_mensal_livre = custo_acl_ano / 12
-        economia_reais_mes = pago_mensal_cativo - pago_mensal_livre
-        economia_perc_mes = (economia_reais_mes / pago_mensal_cativo) * 100
+        pago_mensal_atual = custo_atual_projetado_ano / 12
+        pago_mensal_proposto = custo_proposto_ano / 12
+        economia_reais_mes = pago_mensal_atual - pago_mensal_proposto
+        economia_perc_mes = (economia_reais_mes / pago_mensal_atual) * 100
         
         linhas_proj_mensal.append({
             "Período": f"Ano {ano_idx + 1}",
-            "Média Mensal Cativo (R$/mês)": pago_mensal_cativo,
-            "Média Mensal Livre (R$/mês)": pago_mensal_livre,
+            "Média Mensal Base (R$/mês)": pago_mensal_atual,
+            "Média Mensal E-Lumia (R$/mês)": pago_mensal_proposto,
             "Economia Média Mensal (R$/mês)": economia_reais_mes,
             "Economia (%)": economia_perc_mes
         })
 
     st.markdown("---")
-    st.subheader("📈 Simulação Cronológica: Média Mensal Paga por Ano")
+    st.subheader(f"📈 Simulação Cronológica: Média Mensal Paga por Ano ({'Cativo x Livre' if ambiente_atual == 'Mercado Cativo' else 'Contrato Atual x Proposta'})")
     df_estudo_integral_mensal = pd.DataFrame(linhas_proj_mensal)
     st.dataframe(df_estudo_integral_mensal.style.format({
-        "Média Mensal Cativo (R$/mês)": "R$ {:,.2f}", 
-        "Média Mensal Livre (R$/mês)": "R$ {:,.2f}", 
+        "Média Mensal Base (R$/mês)": "R$ {:,.2f}", 
+        "Média Mensal E-Lumia (R$/mês)": "R$ {:,.2f}", 
         "Economia Média Mensal (R$/mês)": "R$ {:,.2f}",
         "Economia (%)": "{:.1f}%"
     }), use_container_width=True, hide_index=True)
 
-    # 3. TABELA COMPARATIVA POR COMERCIALIZADORA (SOLICITADO)
+    # 3. TABELA COMPARATIVA POR COMERCIALIZADORA
     st.markdown("---")
     st.subheader("📊 Comparativo Global de Economia por Comercializadora")
     df_fornecedores_tela = pd.DataFrame(dados_comparativo_fornecedores)
@@ -510,9 +549,9 @@ if botao_calcular:
     # KPIs de Fechamento Acumulado
     st.markdown("---")
     k_final1, k_final2, k_final3 = st.columns(3)
-    k_final1.metric("Gasto Total Acumulado Cativo", f"R$ {custo_cativo_acumulado_total:,.2f}")
-    k_final2.metric(f"Gasto Total Acumulado ACL ({melhor_com_mes})", f"R$ {custo_livre_acumulado_total:,.2f}")
-    k_final3.metric("Patrimônio Total Recuperado", f"R$ {(custo_cativo_acumulado_total - custo_livre_acumulado_total):,.2f}")
+    k_final1.metric(f"Gasto Total Acumulado ({ambiente_atual})", f"R$ {custo_atual_acumulado_total:,.2f}")
+    k_final2.metric(f"Gasto Total Acumulado E-Lumia ({melhor_com_mes})", f"R$ {custo_livre_acumulado_total:,.2f}")
+    k_final3.metric("Patrimônio Total Recuperado", f"R$ {(custo_atual_acumulado_total - custo_livre_acumulado_total):,.2f}")
 
     # --- MONTAGEM DO PDF ESPELHADO DE ALTA FIDELIDADE ---
     def draw_pdf_pie(df_peso, title_text):
@@ -529,12 +568,14 @@ if botao_calcular:
         pc.labels = rotulos
         pc.sideLabels = 1
         pc.slices.strokeWidth = 0.5
-        if "Cativo" in title_text:
+        
+        if "Cativo" in title_text or "Atual" in title_text:
             pc.slices[0].fillColor = colors.HexColor("#ef4444") 
             pc.slices[3].fillColor = colors.HexColor("#f87171") 
         else:
             pc.slices[3].fillColor = colors.HexColor("#22c55e") 
             pc.slices[4].fillColor = colors.HexColor("#3b82f6") 
+            
         title = String(100, 150, title_text)
         title.fontName = 'Helvetica-Bold'
         title.fontSize = 10
@@ -551,18 +592,16 @@ if botao_calcular:
         title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], fontSize=15, textColor=colors.HexColor("#1A365D"), spaceAfter=6, alignment=1)
         subtitle_style = ParagraphStyle('SubTitle', parent=styles['Normal'], fontSize=11, textColor=colors.HexColor("#64748B"), alignment=1, spaceAfter=15)
         h2_style = ParagraphStyle('H2Style', parent=styles['Heading2'], fontSize=11, textColor=colors.HexColor("#1E3A8A"), spaceBefore=12, spaceAfter=6, fontName='Helvetica-Bold')
-        bold_style = ParagraphStyle('BoldNorm', parent=styles['Normal'], fontSize=9, fontName='Helvetica-Bold', spaceAfter=6)
-
+        
         story = []
         story.append(Paragraph("PROPOSTA EXECUTIVA DE MIGRAÇÃO - MERCADO LIVRE DE ENERGIA", title_style))
         story.append(Paragraph("E-LUMIA | Hub Solution Intelligence", subtitle_style))
         
         if nome_cliente or cnpj_input:
-            story.append(Paragraph(f"<b>Target Client:</b> {nome_cliente} (CNPJ: {cnpj_input})", bold_style))
-            story.append(Paragraph(f"<b>Submercado:</b> {submercado_selecionado} | <b>Produto:</b> {tipo_energia} | <b>Consultor:</b> {vendedor_responsavel}", bold_style))
+            story.append(Paragraph(f"<b>Target Client:</b> {nome_cliente} (CNPJ: {cnpj_input})", styles['Normal']))
+            story.append(Paragraph(f"<b>Submercado:</b> {submercado_selecionado} | <b>Produto:</b> {tipo_energia} | <b>Consultor:</b> {vendedor_responsavel}", styles['Normal']))
             story.append(Spacer(1, 10))
 
-        # Tabela 0: Matriz de Ofertas do PDF (Solicitado)
         story.append(Paragraph("1. Matriz Global de Ofertas Mapeadas (Anual)", h2_style))
         pdf_matriz_data = [["Comercializadora", "Ano 1", "Ano 2", "Ano 3", "Ano 4", "Ano 5"]]
         for row in linhas_matriz_global:
@@ -579,15 +618,15 @@ if botao_calcular:
         story.append(t_matriz)
         story.append(Spacer(1, 10))
 
-        story.append(Paragraph("2. Composição de Custos Mensais (Fatura Atual vs Mercado Livre)", h2_style))
-        grafico_cativo = draw_pdf_pie(df_cat_peso, "Cenário Cativo")
-        grafico_livre = draw_pdf_pie(df_livre_peso, f"Mercado Livre ({melhor_com_mes})")
+        story.append(Paragraph(f"2. Composição de Custos Mensais ({nome_cenario_base} vs Proposta)", h2_style))
+        grafico_cativo = draw_pdf_pie(df_atual_peso, nome_cenario_base)
+        grafico_livre = draw_pdf_pie(df_livre_peso, f"Proposta E-Lumia")
         tabela_graficos = Table([[grafico_cativo, grafico_livre]], colWidths=[270, 270])
         story.append(tabela_graficos)
         story.append(Spacer(1, 10))
 
-        pdf_fatura_data = [["Estrutura de Custo", "Cenário Cativo", "Peso (%)", f"Mercado Livre ({melhor_com_mes})", "Peso (%)"]]
-        linhas_custo = ["Demanda", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta", "Energia ACL", "Gestão E-Lumia"]
+        pdf_fatura_data = [["Estrutura de Custo", "Cenário Base (Atual)", "Peso (%)", f"Proposta E-Lumia", "Peso (%)"]]
+        linhas_custo = ["Demanda", "Demanda (TUSD c/ Desc)", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta", "Energia Atual Concorrente", "Energia Proposta ACL", "Gestão E-Lumia"]
         
         def acha_valor(df, comp):
             linha = df[df["Componente"] == comp]
@@ -595,11 +634,11 @@ if botao_calcular:
             return "-", "-"
             
         for c in linhas_custo:
-            val_cat, peso_cat = acha_valor(df_cat_peso, c)
+            val_cat, peso_cat = acha_valor(df_atual_peso, c)
             val_liv, peso_liv = acha_valor(df_livre_peso, c)
             if val_cat != "-" or val_liv != "-": pdf_fatura_data.append([c, val_cat, peso_cat, val_liv, peso_liv])
                 
-        pdf_fatura_data.append(["SOMA DA FATURA (TOTAL)", f"R$ {fatura_mensal_cativa:,.2f}", "100%", f"R$ {custo_total_acl_melhor_mes:,.2f}", "100%"])
+        pdf_fatura_data.append(["SOMA DA FATURA (TOTAL)", f"R$ {fatura_mensal_atual:,.2f}", "100%", f"R$ {custo_total_acl_melhor_mes:,.2f}", "100%"])
         
         t_fatura = Table(pdf_fatura_data, colWidths=[130, 100, 50, 100, 50])
         t_fatura.setStyle(TableStyle([
@@ -612,13 +651,13 @@ if botao_calcular:
         story.append(Spacer(1, 15))
 
         story.append(Paragraph("3. Estudo Cronológico: Média Mensal Paga por Ano", h2_style))
-        proj_data = [["Período", "Média Mensal Cativo", "Média Mensal Livre", "Economia Mês (R$)", "Economia (%)"]]
+        proj_data = [["Período", "Média Mensal Base Atual", "Média Mensal Proposta", "Economia Mês (R$)", "Economia (%)"]]
         for row in linhas_proj_mensal:
             proj_data.append([
-                row["Período"], f"R$ {row['Média Mensal Cativo (R$/mês)']:,.2f}",
-                f"R$ {row['Média Mensal Livre (R$/mês)']:,.2f}", f"R$ {row['Economia Média Mensal (R$/mês)']:,.2f}", f"{row['Economia (%)']:.1f}%"
+                row["Período"], f"R$ {row['Média Mensal Base (R$/mês)']:,.2f}",
+                f"R$ {row['Média Mensal E-Lumia (R$/mês)']:,.2f}", f"R$ {row['Economia Média Mensal (R$/mês)']:,.2f}", f"{row['Economia (%)']:.1f}%"
             ])
-        t_proj = Table(proj_data, colWidths=[100, 110, 120, 110, 80])
+        t_proj = Table(proj_data, colWidths=[100, 120, 120, 100, 80])
         t_proj.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
             ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
@@ -628,7 +667,6 @@ if botao_calcular:
         story.append(t_proj)
         story.append(Spacer(1, 15))
 
-        # Tabela Nova de Fornecedores no PDF (Solicitado)
         story.append(Paragraph("4. Comparativo de Viabilidade por Comercializadora", h2_style))
         pdf_com_forn_data = [["Comercializadora", "Média Econ. Mês", "Média Econ. Ano", "Total Contrato"]]
         for r_com in dados_comparativo_fornecedores:
