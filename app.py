@@ -234,11 +234,12 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("🌍 Região de Fornecimento")
 submercado_selecionado = st.sidebar.selectbox("Submercado (Auto-Detectado)", lista_submercados, index=lista_submercados.index(submercado_inferido))
 
-# --- MÁQUINA DO TEMPO (ANO DE INÍCIO) ---
+# --- MÁQUINA DO TEMPO & INDEXAÇÃO ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Horizonte do Contrato")
 ano_inicio_contrato = st.sidebar.number_input("Ano de Início do Contrato", min_value=2024, max_value=2035, value=datetime.now().year, step=1, help="Ano civil em que o cliente iniciará o consumo.")
 tempo_contrato = st.sidebar.slider("Duração do Contrato (Meses)", 12, 60, 36, step=12)
+ipca_medio = st.sidebar.number_input("IPCA Médio Anual (%)", value=4.50, format="%.2f", help="Utilizado para inflacionar a energia atual do concorrente e tarifas de Cativo.")
 
 subgrupo = st.sidebar.selectbox("Subgrupo Tarifário", ["A4", "A3"])
 modalidade = st.sidebar.selectbox("Modalidade na Distribuidora", ["Verde", "Azul"], 
@@ -264,7 +265,7 @@ consumo_kwh_p = st.sidebar.number_input("Consumo Ponta (kWh/mês)", value=15000.
 
 if ambiente_atual == "Mercado Livre":
     preco_energia_atual_livre = st.sidebar.number_input("Preço Atual da Energia no Concorrente (R$/MWh)", value=250.00, format="%.2f",
-                                                        help="Digite o valor que o cliente está pagando hoje para a gestora concorrente.")
+                                                        help="Valor flat atual. Será reajustado pelo IPCA ao longo da simulação.")
 else:
     preco_energia_atual_livre = 0.0
 
@@ -275,7 +276,7 @@ consumo_p = consumo_kwh_p / 1000
 consumo_total_mes_kwh = consumo_kwh_fp + consumo_kwh_p
 consumo_total_ano_mwh = (consumo_total_mes_kwh / 1000) * 12
 
-# --- INTEGRAÇÃO DO BANCO DE PREÇOS ---
+# --- INTEGRAÇÃO DO BANCO DE PREÇOS COM MAPEAMENTO EXATO DE ANO ---
 data_atualizacao_csv = "Data Indisponível"
 if os.path.exists(NOME_ARQUIVO_PRECOS):
     timestamp_modificacao = os.path.getmtime(NOME_ARQUIVO_PRECOS)
@@ -295,6 +296,7 @@ if not df_precos_globais.empty:
         cols = df_precos_globais.columns.tolist()
 
     if "Comercializadora" in cols and "Ano" in cols and submercado_selecionado in cols:
+        df_precos_globais["Ano"] = pd.to_numeric(df_precos_globais["Ano"], errors='coerce')
         if "Produto" in cols:
             mask_filtros = (df_precos_globais["Produto"].astype(str).str.strip().str.upper() == tipo_energia.upper())
             df_filtrado = df_precos_globais[mask_filtros].sort_values(by=['Comercializadora', 'Ano'])
@@ -305,19 +307,25 @@ if not df_precos_globais.empty:
         
         for com in comercializadoras:
             df_com = df_filtrado[df_filtrado['Comercializadora'] == com]
-            precos_brutos = df_com[submercado_selecionado].tolist()
-            
             precos_limpos = []
-            for p in precos_brutos[:5]: 
-                str_p = str(p).upper().replace('R$', '').strip()
-                str_p = re.sub(r'[^\d,.-]', '', str_p)
-                str_p = str_p.replace(',', '.')
-                valor_num = pd.to_numeric(str_p, errors='coerce')
-                if pd.isna(valor_num): valor_num = 0.0
-                precos_limpos.append(float(valor_num))
+            
+            # Mapeia cirurgicamente o preço usando a coluna "Ano" exata solicitada pelo painel
+            for i in range(5):
+                ano_alvo = ano_inicio_contrato + i
+                row_ano = df_com[df_com['Ano'] == ano_alvo]
                 
-            while len(precos_limpos) < 5:
-                precos_limpos.append(precos_limpos[-1] if precos_limpos else 0.0)
+                if not row_ano.empty:
+                    p = row_ano[submercado_selecionado].iloc[0]
+                    str_p = str(p).upper().replace('R$', '').strip()
+                    str_p = re.sub(r'[^\d,.-]', '', str_p)
+                    str_p = str_p.replace(',', '.')
+                    valor_num = pd.to_numeric(str_p, errors='coerce')
+                    if pd.isna(valor_num): valor_num = 0.0
+                    precos_limpos.append(float(valor_num))
+                else:
+                    # Se não houver curva cadastrada para aquele ano específico, repete o último valor lido
+                    precos_limpos.append(precos_limpos[-1] if precos_limpos else 0.0)
+                    
             dados_precos_auto[com] = precos_limpos
 
 if not comercializadoras:
@@ -337,7 +345,7 @@ if modo_manual:
             precos_anos = []
             for i in range(5):
                 default_val = float(dados_precos_auto[com][i]) if i < len(dados_precos_auto[com]) else 0.0
-                p = st.number_input(f"Ano {i+1} (R$/MWh)", value=default_val, key=f"manual_{com}_ano_{i+1}")
+                p = st.number_input(f"Ano {ano_inicio_contrato+i} (R$/MWh)", value=default_val, key=f"manual_{com}_ano_{i}")
                 precos_anos.append(p)
             dados_precos[com] = precos_anos
 else:
@@ -375,7 +383,7 @@ st.title(f"⚡ E-Lumia | Proposta: {nome_cenario_base} vs. E-Lumia")
 # A TELA SÓ É PROCESSADA SE A MEMÓRIA ESTIVER ATIVA
 if st.session_state.mostrar_resultados:
     
-    # 1. MATRIZ DE OFERTAS: Mantém sempre os valores exatos do CSV para todos os cenários
+    # 1. MATRIZ DE OFERTAS
     st.subheader(f"🏢 Matriz Global de Ofertas Mapeadas para o Estudo ({tipo_energia})")
     linhas_matriz_global = []
     for com in comercializadoras:
@@ -432,32 +440,33 @@ if st.session_state.mostrar_resultados:
 
     anos_reais = int(tempo_contrato / 12)
     dados_comparativo_fornecedores = []
-    ano_corrente_calendario = ano_inicio_contrato
-
+    
+    # MOTOR FINANCEIRO COM REGRAS LIVRE X LIVRE EXATAS
     for com in comercializadoras:
         soma_economia_contrato = 0
         for ano_idx in range(anos_reais):
-            fator_distribuidora = (1 + 0.08) ** ano_idx
-            fator_gestao = (1 + 0.06) ** ano_idx
             
-            # REGRAS INTELIGENTES DE INFLAÇÃO DE ENERGIA (CATIVO VS LIVRE)
             if ambiente_atual == "Mercado Cativo":
+                fator_distribuidora = (1 + 0.08) ** ano_idx
+                fator_gestao = (1 + (ipca_medio / 100)) ** ano_idx
                 custo_atual_projetado_ano = (fatura_mensal_atual * 12) * fator_distribuidora
-                # Em Cativo x Livre, aplicamos indexador na proposta
-                fator_energia_livre = (1 + 0.06) ** ano_idx
-                preco_csv_do_ano = dados_precos[com][ano_idx] * fator_energia_livre
             else:
-                # Em Livre x Livre, a energia do concorrente e da proposta ficam SEM indexador extra
-                p_atual_livre = preco_energia_atual_livre 
+                # Regra de Ouro Livre x Livre: NENHUM indexador para E-Lumia ou Concessionária, exceto o IPCA na energia do concorrente.
+                fator_distribuidora = 1.0 
+                fator_gestao = 1.0
+                fator_energia_concorrente = (1 + (ipca_medio / 100)) ** ano_idx
+                
+                p_atual_livre = preco_energia_atual_livre * fator_energia_concorrente
                 _, _, fat_energia_ano_concorrente = decompor_item(consumo_total_ano_mwh * p_atual_livre)
                 custo_atual_projetado_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_concorrente
-                # O preço E-Lumia pega exatamente o que está no CSV para o ano sem inflar
-                preco_csv_do_ano = dados_precos[com][ano_idx] 
             
+            # E-LUMIA: Usa exatamente o preço mapeado no CSV pro ano, SEM somar nenhuma inflação extra.
+            preco_csv_do_ano = dados_precos[com][ano_idx]
             _, _, fatura_energia_ano_elumia = decompor_item(consumo_total_ano_mwh * preco_csv_do_ano)
             
             fatura_resid_ano = (fatura_residual_concessionaria_acl * 12) * fator_distribuidora
-            custo_proposto_ano = fatura_resid_ano + fatura_energia_ano_elumia + ((total_gestao_elumia_mes * 12) * fator_gestao)
+            fee_ano = (total_gestao_elumia_mes * 12) * fator_gestao
+            custo_proposto_ano = fatura_resid_ano + fatura_energia_ano_elumia + fee_ano
             
             soma_economia_contrato += (custo_atual_projetado_ano - custo_proposto_ano)
             
@@ -539,20 +548,21 @@ if st.session_state.mostrar_resultados:
         custo_livre_acumulado_total = 0
 
         for ano_idx in range(anos_reais):
-            ano_civil_estudo = ano_corrente_calendario + ano_idx
-            fator_distribuidora = (1 + 0.08) ** ano_idx
-            fator_gestao = (1 + 0.06) ** ano_idx
+            ano_civil_estudo = ano_inicio_contrato + ano_idx
             
             if ambiente_atual == "Mercado Cativo":
+                fator_distribuidora = (1 + 0.08) ** ano_idx
+                fator_gestao = (1 + (ipca_medio / 100)) ** ano_idx
                 custo_atual_projetado_ano = (fatura_mensal_atual * 12) * fator_distribuidora
-                fator_energia_livre = (1 + 0.06) ** ano_idx
-                preco_csv_do_ano = dados_precos[melhor_com_mes][ano_idx] * fator_energia_livre
             else:
-                p_atual_livre = preco_energia_atual_livre 
+                fator_distribuidora = 1.0
+                fator_gestao = 1.0
+                fator_energia_concorrente = (1 + (ipca_medio / 100)) ** ano_idx
+                p_atual_livre = preco_energia_atual_livre * fator_energia_concorrente
                 _, _, fat_energia_ano_concorrente = decompor_item(consumo_total_ano_mwh * p_atual_livre)
                 custo_atual_projetado_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_concorrente
-                preco_csv_do_ano = dados_precos[melhor_com_mes][ano_idx]
                 
+            preco_csv_do_ano = dados_precos[melhor_com_mes][ano_idx]
             _, _, fatura_energia_ano_elumia = decompor_item(consumo_total_ano_mwh * preco_csv_do_ano)
             
             fatura_resid_ano = (fatura_residual_concessionaria_acl * 12) * fator_distribuidora
