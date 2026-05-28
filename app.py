@@ -316,6 +316,7 @@ if not df_precos_globais.empty:
             dados_precos_auto[com] = precos_limpos
 
 if not comercializadoras:
+    st.sidebar.warning(f"⚠️ Valores não encontrados no arquivo CSV. Usando padrão.")
     comercializadoras = ["Casa dos Ventos Padrão", "Matrix Padrão"]
     dados_precos_auto = {
         "Casa dos Ventos Padrão": [180.0, 186.0, 192.5, 199.2, 206.1],
@@ -373,7 +374,7 @@ if botao_calcular:
         total_demanda_cat = total_demanda_p_cat + total_demanda_fp_cat
         
         _, _, total_demanda_p_acl = decompor_item(demanda_ponta * componentes["tusd_demanda_p"] * fator_desconto_demanda)
-        _, _, total_demanda_fp_acl = decompor_item(demanda_fponta * components["tusd_demanda_fp"] * fator_desconto_demanda)
+        _, _, total_demanda_fp_acl = decompor_item(demanda_fponta * componentes["tusd_demanda_fp"] * fator_desconto_demanda)
         total_demanda_acl = total_demanda_p_acl + total_demanda_fp_acl
     else:
         _, _, total_demanda_cat = decompor_item(demanda_unica * componentes["tusd_demanda"])
@@ -381,7 +382,7 @@ if botao_calcular:
 
     _, _, total_tusd_p_cat = decompor_item(consumo_p * componentes["tusd_energia_p"])
     _, _, total_tusd_fp_cat = decompor_item(consumo_fp * componentes["tusd_energia_fp"])
-    _, _, total_te_p_cat = decompor_item(consumo_p * components["te_p"])
+    _, _, total_te_p_cat = decompor_item(consumo_p * componentes["te_p"])
     _, _, total_te_fp_cat = decompor_item(consumo_fp * componentes["te_fp"])
 
     if ambiente_atual == "Mercado Cativo":
@@ -468,6 +469,7 @@ if botao_calcular:
     </div>
     """, unsafe_allow_html=True)
 
+    # --- SISTEMA DE ABAS (TABS) PARA UX/UI ---
     tab_resumo, tab_projecao, tab_concorrencia, tab_bandeiras = st.tabs([
         "📊 1. Resumo Executivo", 
         "📈 2. Projeção Financeira", 
@@ -550,6 +552,7 @@ if botao_calcular:
 
         df_estudo_integral_mensal = pd.DataFrame(linhas_proj_mensal)
         
+        # --- GRÁFICO DE BARRAS EVOLUTIVO ---
         fig_bar = px.bar(
             df_estudo_integral_mensal, 
             x='Ano', 
