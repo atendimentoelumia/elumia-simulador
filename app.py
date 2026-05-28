@@ -360,6 +360,20 @@ if pld_dados:
 nome_cenario_base = "Mercado Cativo" if ambiente_atual == "Mercado Cativo" else "Contrato Atual"
 st.title(f"⚡ E-Lumia | Proposta: {nome_cenario_base} vs. E-Lumia")
 
+# 1. EXIBIÇÃO DA MATRIZ GLOBAL DE OFERTAS
+st.subheader(f"🏢 Matriz Global de Ofertas Mapeadas para o Estudo ({tipo_energia})")
+linhas_matriz_global = []
+for com in comercializadoras:
+    linhas_matriz_global.append({
+        "Comercializadora": com,
+        "2026 (R$/MWh)": dados_precos[com][0], "2027 (R$/MWh)": dados_precos[com][1],
+        "2028 (R$/MWh)": dados_precos[com][2], "2029 (R$/MWh)": dados_precos[com][3], "2030 (R$/MWh)": dados_precos[com][4],
+    })
+df_matriz_global_tela = pd.DataFrame(linhas_matriz_global)
+st.dataframe(df_matriz_global_tela.style.format({
+    "2026 (R$/MWh)": moeda_br, "2027 (R$/MWh)": moeda_br, "2028 (R$/MWh)": moeda_br, "2029 (R$/MWh)": moeda_br, "2030 (R$/MWh)": moeda_br
+}), use_container_width=True, hide_index=True)
+
 if botao_calcular:
     
     def decompor_item(valor_base):
@@ -407,14 +421,7 @@ if botao_calcular:
     dados_comparativo_fornecedores = []
     ano_corrente_calendario = 2026
 
-    linhas_matriz_global = []
     for com in comercializadoras:
-        linhas_matriz_global.append({
-            "Comercializadora": com,
-            "2026 (R$/MWh)": dados_precos[com][0], "2027 (R$/MWh)": dados_precos[com][1],
-            "2028 (R$/MWh)": dados_precos[com][2], "2029 (R$/MWh)": dados_precos[com][3], "2030 (R$/MWh)": dados_precos[com][4],
-        })
-        
         soma_economia_contrato = 0
         for ano_idx in range(anos_reais):
             fator_distribuidora = (1 + 0.08) ** ano_idx
@@ -486,7 +493,7 @@ if botao_calcular:
             "Componente": ["Demanda (TUSD c/ Desc)", "TUSD Ponta", "TUSD F. Ponta", "Energia Proposta ACL", "Gestão E-Lumia"],
             "Valor": [total_demanda_acl, total_tusd_p_cat, total_tusd_fp_cat, total_energia_mes_melhor, total_gestao_elumia_mes]
         })
-        df_livre_peso = df_livre_peso[df_livre_peso["Valor"] > 0]
+        df_livre_peso = df_livre_peso[df_livre_peso["Valor"] > 0].copy()
         df_livre_peso["Peso (%)"] = (df_livre_peso["Valor"] / df_livre_peso["Valor"].sum()) * 100
 
         col_g1, col_g2 = st.columns(2)
@@ -613,18 +620,24 @@ if botao_calcular:
         pc.width = 120
         pc.height = 120
         pc.data = df_peso['Valor'].tolist()
+        
+        # Cores Dinâmicas e Seguras: previne IndexError independente da quantidade de fatias!
+        cor_cativo = [colors.HexColor("#ef4444"), colors.HexColor("#f87171"), colors.HexColor("#fca5a5"), colors.HexColor("#b91c1c"), colors.HexColor("#7f1d1d")]
+        cor_livre = [colors.HexColor("#22c55e"), colors.HexColor("#4ade80"), colors.HexColor("#16a34a"), colors.HexColor("#3b82f6"), colors.HexColor("#2563eb")]
+        
+        for i in range(len(pc.data)):
+            if "Base" in title_text or "Atual" in title_text:
+                pc.slices[i].fillColor = cor_cativo[i % len(cor_cativo)]
+            else:
+                pc.slices[i].fillColor = cor_livre[i % len(cor_livre)]
+                
         rotulos = []
         for i, row in df_peso.iterrows():
             rotulos.append(f"{row['Componente']} ({perc_br(row['Peso (%)'])})")
         pc.labels = rotulos
         pc.sideLabels = 1
         pc.slices.strokeWidth = 0.5
-        if "Base" in title_text or "Atual" in title_text:
-            pc.slices[0].fillColor = colors.HexColor("#ef4444") 
-            pc.slices[3].fillColor = colors.HexColor("#f87171") 
-        else:
-            pc.slices[3].fillColor = colors.HexColor("#22c55e") 
-            pc.slices[4].fillColor = colors.HexColor("#3b82f6") 
+        
         title = String(120, 150, title_text)
         title.fontName = 'Helvetica-Bold'
         title.fontSize = 11
@@ -668,6 +681,7 @@ if botao_calcular:
             story.append(t_pld)
             story.append(Spacer(1, 15))
 
+    # Continuação do PDF...
         if nome_cliente or cnpj_input:
             card_text = f"<font color='#3B82F6'><b>DIAGNÓSTICO COMERCIAL EXECUTIVO</b></font><br/><br/>Parceiro mais competitivo selecionado para <b>{nome_cliente}</b> no Submercado <b>{submercado_selecionado}</b> para o produto <b>{tipo_energia}</b>:<br/><b>{melhor_com_mes}</b> com economia de <b>{perc_br(economia_mes_1_perc)}</b> em 2026.<br/><br/><font size='10' color='#94A3B8'>Consultor Responsável: {vendedor_responsavel}</font>"
             t_card = Table([[Paragraph(card_text, card_style)]], colWidths=[732])
@@ -738,37 +752,48 @@ if botao_calcular:
         t_kpi = Table([[f"Gasto Acumulado ({ambiente_atual})", f"Gasto Acumulado E-Lumia", "Patrimônio Total Recuperado"], kpi_values], colWidths=[244, 244, 244])
         t_kpi.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#0F172A")), ('BACKGROUND', (0,1), (-1,1), colors.HexColor("#1E293B")), ('TEXTCOLOR', (0,0), (-1,-1), colors.whitesmoke), ('ALIGN', (0,0), (-1,-1), 'CENTER'), ('FONTNAME', (0,1), (-1,1), 'Helvetica-Bold'), ('FONTSIZE', (0,1), (-1,1), 14), ('GRID', (0,0), (-1,-1), 2, colors.white)]))
         story.append(t_kpi)
+        
+        doc.build(story)
+        buffer.seek(0)
         return buffer.getvalue()
 
-    # --- NOVO: CENTRAL DE FECHAMENTO COM CONTROLE DE ARQUIVAMENTO MANUAL ---
-    st.markdown("---")
-    st.subheader("🖨️ Central de Apresentação e Fechamento de Propostas")
-    st.caption("Utilize os botões abaixo para interagir de forma controlada com o repositório oficial da empresa.")
-
-    col_pdf_down, col_drive_up = st.columns(2)
-
-    with col_pdf_down:
+    try:
         pdf_bytes = build_pdf()
-        nome_cliente_limpo = re.sub(r'[\\/*?:"<>|.]', '', nome_cliente).replace(' ', '_') if nome_cliente else "Cliente"
-        nome_arquivo_manual = f"Estudo_Viabilidade_{nome_cliente_limpo}_{vendedor_responsavel}.pdf"
         
-        st.download_button(
-            label="📄 Baixar Proposta Executiva Oficial (PDF Local)",
-            data=pdf_bytes,
-            file_name=nome_arquivo_manual,
-            mime="application/pdf",
-            use_container_width=True
-        )
-
-    with col_drive_up:
-        if st.button("💾 Arquivar Versão Oficial no Google Drive", use_container_width=True, type="secondary"):
-            timestamp_oficial = datetime.now().strftime("%d-%m-%Y_%Hh%M")
-            nome_arquivamento_drive = f"Proposta_{nome_cliente_limpo}_{vendedor_responsavel}_{timestamp_oficial}.pdf"
+        st.markdown("---")
+        col_d1, col_d2 = st.columns([2, 1])
+        
+        data_atual = datetime.now().strftime("%d-%m-%Y")
+        nome_cliente_limpo = re.sub(r'[\\/*?:"<>|.]', '', nome_cliente).replace(' ', '_') if nome_cliente else "Cliente_Nao_Identificado"
+        
+        with col_d1:
+            st.subheader("🖨️ Central de Fechamento de Propostas")
+            st.caption("Faça o download do PDF executivo para apresentação em reunião ou envio à diretoria.")
+            nome_arquivo_manual = f"Estudo_Viabilidade_{nome_cliente_limpo}_{vendedor_responsavel}_{data_atual}.pdf"
+            st.download_button(
+                label="📄 Baixar Proposta Executiva Comercial (PDF)",
+                data=pdf_bytes,
+                file_name=nome_arquivo_manual,
+                mime="application/pdf",
+                use_container_width=True
+            )
             
-            with st.spinner("Conectando ao Google Drive da E-Lumia..."):
-                status_upload = upload_automatico_drive(pdf_bytes, nome_arquivamento_drive)
+        with col_d2:
+            st.markdown("<br/>", unsafe_allow_html=True)
+            if st.button("💾 Arquivar Versão no Google Drive", use_container_width=True, type="secondary"):
+                timestamp_oficial = datetime.now().strftime("%d-%m-%Y_%Hh%M")
+                nome_arquivamento_drive = f"Proposta_{nome_cliente_limpo}_{vendedor_responsavel}_{timestamp_oficial}.pdf"
                 
-            if status_upload is True:
-                st.success(f"✅ Sucesso! Versão cravada e arquivada como: '{nome_arquivamento_drive}'")
-            else:
-                st.error(f"Falha de credenciais com o servidor do Drive: {status_upload}")
+                with st.spinner("Conectando ao Google Drive..."):
+                    status_upload = upload_automatico_drive(pdf_bytes, nome_arquivamento_drive)
+                    
+                if status_upload is True:
+                    st.success(f"✅ Arquivado no Drive de {vendedor_responsavel}!")
+                else:
+                    st.error(f"Erro no backup do Drive: {status_upload}")
+                    
+    except Exception as erro_pdf:
+        st.error(f"⚠️ Erro ao gerar o PDF. Verifique se os dados estão preenchidos corretamente. (Log técnico: {erro_pdf})")
+
+else:
+    st.info("👋 Preencha os dados do cliente e clique em **Gerar Diagnóstico Comercial**. As abas do painel executivo aparecerão aqui.")
