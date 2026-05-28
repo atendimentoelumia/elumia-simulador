@@ -373,7 +373,7 @@ if botao_calcular:
         total_demanda_cat = total_demanda_p_cat + total_demanda_fp_cat
         
         _, _, total_demanda_p_acl = decompor_item(demanda_ponta * componentes["tusd_demanda_p"] * fator_desconto_demanda)
-        _, _, total_demanda_fp_acl = decompor_item(demanda_fponta * componentes["tusd_demanda_fp"] * fator_desconto_demanda)
+        _, _, total_demanda_fp_acl = decompor_item(demanda_fponta * components["tusd_demanda_fp"] * fator_desconto_demanda)
         total_demanda_acl = total_demanda_p_acl + total_demanda_fp_acl
     else:
         _, _, total_demanda_cat = decompor_item(demanda_unica * componentes["tusd_demanda"])
@@ -381,7 +381,7 @@ if botao_calcular:
 
     _, _, total_tusd_p_cat = decompor_item(consumo_p * componentes["tusd_energia_p"])
     _, _, total_tusd_fp_cat = decompor_item(consumo_fp * componentes["tusd_energia_fp"])
-    _, _, total_te_p_cat = decompor_item(consumo_p * componentes["te_p"])
+    _, _, total_te_p_cat = decompor_item(consumo_p * components["te_p"])
     _, _, total_te_fp_cat = decompor_item(consumo_fp * componentes["te_fp"])
 
     if ambiente_atual == "Mercado Cativo":
@@ -407,7 +407,6 @@ if botao_calcular:
     dados_comparativo_fornecedores = []
     ano_corrente_calendario = 2026
 
-    # Varredura de Comercializadoras
     linhas_matriz_global = []
     for com in comercializadoras:
         linhas_matriz_global.append({
@@ -469,7 +468,6 @@ if botao_calcular:
     </div>
     """, unsafe_allow_html=True)
 
-    # --- SISTEMA DE ABAS (TABS) PARA UX/UI ---
     tab_resumo, tab_projecao, tab_concorrencia, tab_bandeiras = st.tabs([
         "📊 1. Resumo Executivo", 
         "📈 2. Projeção Financeira", 
@@ -552,7 +550,6 @@ if botao_calcular:
 
         df_estudo_integral_mensal = pd.DataFrame(linhas_proj_mensal)
         
-        # --- GRÁFICO DE BARRAS EVOLUTIVO ---
         fig_bar = px.bar(
             df_estudo_integral_mensal, 
             x='Ano', 
@@ -793,8 +790,8 @@ if botao_calcular:
         pdf_bandeiras_data = [["Cenário Hídrico", "Cativo Projetado", f"Proposta E-Lumia", "Economia (R$)", "Economia (%)"]]
         for row in linhas_bandeiras:
             pdf_bandeiras_data.append([
-                row["Cenário Hídrico"], moeda_br(row['Custo Cativo Mensal Projetado']), moeda_br(row['Custo Mensal Proposta E-Lumia']),
-                moeda_br(row['Economia (R$)']), perc_br(row['Economia (%)'])
+                row["Cenário Hídrico"], moeda_br(row['Custo Cativo Estimado (c/ Bandeira)']), moeda_br(row['Custo Mensal Proposta E-Lumia']),
+                moeda_br(row['Economia Mensal Gerada (R$)']), perc_br(row['Economia (%)'])
             ])
         t_band = Table(pdf_bandeiras_data, colWidths=[132, 150, 150, 150, 150])
         t_band.setStyle(TableStyle([
