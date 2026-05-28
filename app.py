@@ -198,7 +198,7 @@ st.sidebar.markdown("---")
 
 st.sidebar.header("🎯 Qualificação do Cliente")
 
-# SELETOR DE AMBIENTE (CATIVO VS LIVRE)
+# SELETOR DE AMBIENTE (CATIVO VS LIVRE) COM TOOLTIP
 ambiente_atual = st.sidebar.radio("Ambiente Atual do Cliente", ["Mercado Cativo", "Mercado Livre"], 
                                   help="Selecione Cativo para comparar contra as tarifas da concessionária. Selecione Livre para comparar nossa proposta com o contrato atual do cliente.")
 
@@ -234,18 +234,13 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("🌍 Região de Fornecimento")
 submercado_selecionado = st.sidebar.selectbox("Submercado (Auto-Detectado)", lista_submercados, index=lista_submercados.index(submercado_inferido))
 
-# --- NOVO: MÁQUINA DO TEMPO (ANO DE INÍCIO) ---
-st.sidebar.markdown("---")
-st.sidebar.subheader("📅 Horizonte do Contrato")
-ano_inicio_contrato = st.sidebar.number_input("Ano de Início do Contrato", min_value=2024, max_value=2035, value=datetime.now().year, step=1, help="Ano civil em que o cliente iniciará o consumo no Mercado Livre.")
-tempo_contrato = st.sidebar.slider("Duração do Contrato (Meses)", 12, 60, 36, step=12)
-
 subgrupo = st.sidebar.selectbox("Subgrupo Tarifário", ["A4", "A3"])
 modalidade = st.sidebar.selectbox("Modalidade na Distribuidora", ["Verde", "Azul"], 
                                   help="Tarifa Verde: Demanda única. Tarifa Azul: Exige separação entre Demanda Ponta e Fora Ponta.")
+tempo_contrato = st.sidebar.slider("Horizonte (Meses)", 12, 60, 36, step=12)
 
 tipo_energia = st.sidebar.selectbox("Produto Sugerido", ["Convencional", "Incentivada 50%", "Incentivada 100%"], 
-                                    help="A energia incentivada possui fontes renováveis e gera desconto direto na Tarifa de Uso do Sistema de Distribuição (TUSD).")
+                                    help="A energia incentivada possui fontes renováveis e gera desconto direto na Tarifa de Uso do Sistema de Distribuição (TUSD) do cliente.")
 fator_desconto_demanda = 1.0 if tipo_energia == "Convencional" else (0.5 if tipo_energia == "Incentivada 50%" else 0.0)
 
 st.sidebar.subheader("📊 Métricas de Consumo e Demanda")
@@ -321,6 +316,7 @@ if not df_precos_globais.empty:
             dados_precos_auto[com] = precos_limpos
 
 if not comercializadoras:
+    st.sidebar.warning(f"⚠️ Valores não encontrados no arquivo CSV. Usando padrão.")
     comercializadoras = ["Casa dos Ventos Padrão", "Matrix Padrão"]
     dados_precos_auto = {
         "Casa dos Ventos Padrão": [180.0, 186.0, 192.5, 199.2, 206.1],
@@ -343,6 +339,11 @@ if modo_manual:
 else:
     dados_precos = dados_precos_auto
 
+# NOVO INPUT: ANO DE INÍCIO DO CONTRATO
+st.sidebar.markdown("---")
+st.sidebar.subheader("📅 Horizonte do Contrato")
+ano_inicio_contrato = st.sidebar.number_input("Ano de Início do Contrato", min_value=2024, max_value=2035, value=datetime.now().year, step=1, help="Ano civil em que o cliente iniciará o consumo.")
+
 componentes = fetch_fatura_data(concessionaria, subgrupo, modalidade)
 
 st.sidebar.markdown("---")
@@ -364,20 +365,6 @@ if pld_dados:
 
 nome_cenario_base = "Mercado Cativo" if ambiente_atual == "Mercado Cativo" else "Contrato Atual"
 st.title(f"⚡ E-Lumia | Proposta: {nome_cenario_base} vs. E-Lumia")
-
-# 1. EXIBIÇÃO DA MATRIZ GLOBAL DE OFERTAS (DINÂMICA)
-st.subheader(f"🏢 Matriz Global de Ofertas Mapeadas para o Estudo ({tipo_energia})")
-linhas_matriz_global = []
-for com in comercializadoras:
-    row_data = {"Comercializadora": com}
-    for i in range(5):
-        ano_alvo = ano_inicio_contrato + i
-        row_data[f"{ano_alvo} (R$/MWh)"] = dados_precos[com][i]
-    linhas_matriz_global.append(row_data)
-
-df_matriz_global_tela = pd.DataFrame(linhas_matriz_global)
-format_dict_matriz = {f"{ano_inicio_contrato + i} (R$/MWh)": moeda_br for i in range(5)}
-st.dataframe(df_matriz_global_tela.style.format(format_dict_matriz), use_container_width=True, hide_index=True)
 
 if botao_calcular:
     
@@ -424,11 +411,16 @@ if botao_calcular:
 
     anos_reais = int(tempo_contrato / 12)
     dados_comparativo_fornecedores = []
-    
-    # VARIÁVEL TEMPORAL MESTRE DEFINIDA PELO USUÁRIO
     ano_corrente_calendario = ano_inicio_contrato
 
+    linhas_matriz_global = []
     for com in comercializadoras:
+        row_data = {"Comercializadora": com}
+        for i in range(5):
+            ano_alvo = ano_inicio_contrato + i
+            row_data[f"{ano_alvo} (R$/MWh)"] = dados_precos[com][i]
+        linhas_matriz_global.append(row_data)
+
         soma_economia_contrato = 0
         for ano_idx in range(anos_reais):
             fator_distribuidora = (1 + 0.08) ** ano_idx
@@ -505,7 +497,7 @@ if botao_calcular:
 
         col_g1, col_g2 = st.columns(2)
         with col_g1:
-            fig_cat = px.pie(df_atual_peso, values='Valor', names='Componente', title=nome_cenario_base, hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
+            fig_cat = px.pie(df_atual_peso, values='Valor', names='Componente', title="Cenário Base (Atual)", hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
             fig_cat.update_traces(textposition='inside', textinfo='percent+label', marker=dict(line=dict(color='#0F172A', width=2)))
             fig_cat.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="white")
             st.plotly_chart(fig_cat, use_container_width=True)
@@ -582,6 +574,8 @@ if botao_calcular:
         col_c1, col_c2 = st.columns(2)
         with col_c1:
             st.caption("Matriz Base de Preços (R$/MWh)")
+            df_matriz_global_tela = pd.DataFrame(linhas_matriz_global)
+            format_dict_matriz = {f"{ano_inicio_contrato + i} (R$/MWh)": moeda_br for i in range(5)}
             st.dataframe(df_matriz_global_tela.style.format(format_dict_matriz), use_container_width=True, hide_index=True)
         with col_c2:
             st.caption("Ranking de Viabilidade por Comercializadora")
@@ -691,7 +685,6 @@ if botao_calcular:
             story.append(t_card)
             story.append(Spacer(1, 15))
 
-        # --- A MATRIZ GLOBAL NO PDF AGORA USA O ANO DINÂMICO ---
         story.append(Paragraph("1. Matriz Global de Ofertas Mapeadas (Anual)", h2_style))
         header_anos = [str(ano_inicio_contrato + i) for i in range(5)]
         pdf_matriz_data = [["Comercializadora"] + header_anos]
@@ -737,7 +730,7 @@ if botao_calcular:
         for row in linhas_proj_mensal:
             proj_data.append([row["Ano"], moeda_br(row['Média Mensal Base (R$/mês)']), moeda_br(row['Média Mensal E-Lumia (R$/mês)']), moeda_br(row['Economia Média Mensal (R$/mês)']), perc_br(row['Economia (%)'])])
         t_proj = Table(proj_data, colWidths=[132, 150, 150, 150, 150])
-        t_proj.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke), ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey), ('FONTSIZE', (0,0), (-1,-1), 9), ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#16A34A")), ('TEXTCOLOR', (0,-1), (-1,-1), colors.whitesmok()), ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold')]))
+        t_proj.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke), ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey), ('FONTSIZE', (0,0), (-1,-1), 9), ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#16A34A")), ('TEXTCOLOR', (0,-1), (-1,-1), colors.whitesmoke), ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold')]))
         story.append(t_proj)
         story.append(Spacer(1, 15))
 
