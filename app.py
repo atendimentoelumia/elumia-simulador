@@ -234,13 +234,18 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("🌍 Região de Fornecimento")
 submercado_selecionado = st.sidebar.selectbox("Submercado (Auto-Detectado)", lista_submercados, index=lista_submercados.index(submercado_inferido))
 
+# --- MÁQUINA DO TEMPO (ANO DE INÍCIO) ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("📅 Horizonte do Contrato")
+ano_inicio_contrato = st.sidebar.number_input("Ano de Início do Contrato", min_value=2024, max_value=2035, value=datetime.now().year, step=1, help="Ano civil em que o cliente iniciará o consumo.")
+tempo_contrato = st.sidebar.slider("Duração do Contrato (Meses)", 12, 60, 36, step=12)
+
 subgrupo = st.sidebar.selectbox("Subgrupo Tarifário", ["A4", "A3"])
 modalidade = st.sidebar.selectbox("Modalidade na Distribuidora", ["Verde", "Azul"], 
                                   help="Tarifa Verde: Demanda única. Tarifa Azul: Exige separação entre Demanda Ponta e Fora Ponta.")
-tempo_contrato = st.sidebar.slider("Horizonte (Meses)", 12, 60, 36, step=12)
 
 tipo_energia = st.sidebar.selectbox("Produto Sugerido", ["Convencional", "Incentivada 50%", "Incentivada 100%"], 
-                                    help="A energia incentivada possui fontes renováveis e gera desconto direto na Tarifa de Uso do Sistema de Distribuição (TUSD) do cliente.")
+                                    help="A energia incentivada possui fontes renováveis e gera desconto direto na Tarifa de Uso do Sistema de Distribuição (TUSD).")
 fator_desconto_demanda = 1.0 if tipo_energia == "Convencional" else (0.5 if tipo_energia == "Incentivada 50%" else 0.0)
 
 st.sidebar.subheader("📊 Métricas de Consumo e Demanda")
@@ -338,11 +343,6 @@ if modo_manual:
 else:
     dados_precos = dados_precos_auto
 
-# NOVO INPUT: ANO DE INÍCIO DO CONTRATO
-st.sidebar.markdown("---")
-st.sidebar.subheader("📅 Horizonte do Contrato")
-ano_inicio_contrato = st.sidebar.number_input("Ano de Início do Contrato", min_value=2024, max_value=2035, value=datetime.now().year, step=1, help="Ano civil em que o cliente iniciará o consumo.")
-
 componentes = fetch_fatura_data(concessionaria, subgrupo, modalidade)
 
 # --- CONTROLE DE MEMÓRIA (SESSION STATE) ---
@@ -375,7 +375,7 @@ st.title(f"⚡ E-Lumia | Proposta: {nome_cenario_base} vs. E-Lumia")
 # A TELA SÓ É PROCESSADA SE A MEMÓRIA ESTIVER ATIVA
 if st.session_state.mostrar_resultados:
     
-    # 1. EXIBIÇÃO DA MATRIZ GLOBAL DE OFERTAS
+    # 1. MATRIZ DE OFERTAS: Mantém sempre os valores exatos do CSV para todos os cenários
     st.subheader(f"🏢 Matriz Global de Ofertas Mapeadas para o Estudo ({tipo_energia})")
     linhas_matriz_global = []
     for com in comercializadoras:
@@ -438,20 +438,26 @@ if st.session_state.mostrar_resultados:
         soma_economia_contrato = 0
         for ano_idx in range(anos_reais):
             fator_distribuidora = (1 + 0.08) ** ano_idx
+            fator_gestao = (1 + 0.06) ** ano_idx
             
+            # REGRAS INTELIGENTES DE INFLAÇÃO DE ENERGIA (CATIVO VS LIVRE)
             if ambiente_atual == "Mercado Cativo":
                 custo_atual_projetado_ano = (fatura_mensal_atual * 12) * fator_distribuidora
-            else:
+                # Em Cativo x Livre, aplicamos indexador na proposta
                 fator_energia_livre = (1 + 0.06) ** ano_idx
-                p_atual_livre = preco_energia_atual_livre * fator_energia_livre
+                preco_csv_do_ano = dados_precos[com][ano_idx] * fator_energia_livre
+            else:
+                # Em Livre x Livre, a energia do concorrente e da proposta ficam SEM indexador extra
+                p_atual_livre = preco_energia_atual_livre 
                 _, _, fat_energia_ano_concorrente = decompor_item(consumo_total_ano_mwh * p_atual_livre)
                 custo_atual_projetado_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_concorrente
+                # O preço E-Lumia pega exatamente o que está no CSV para o ano sem inflar
+                preco_csv_do_ano = dados_precos[com][ano_idx] 
             
-            preco_csv_do_ano = dados_precos[com][ano_idx]
             _, _, fatura_energia_ano_elumia = decompor_item(consumo_total_ano_mwh * preco_csv_do_ano)
             
-            fator_gestao = (1 + 0.06) ** ano_idx
-            custo_proposto_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fatura_energia_ano_elumia + ((total_gestao_elumia_mes * 12) * fator_gestao)
+            fatura_resid_ano = (fatura_residual_concessionaria_acl * 12) * fator_distribuidora
+            custo_proposto_ano = fatura_resid_ano + fatura_energia_ano_elumia + ((total_gestao_elumia_mes * 12) * fator_gestao)
             
             soma_economia_contrato += (custo_atual_projetado_ano - custo_proposto_ano)
             
@@ -484,7 +490,7 @@ if st.session_state.mostrar_resultados:
         <h3 style='margin-top: 0px; margin-bottom: 5px; color: #60A5FA;'>🏆 Match Ideal Encontrado!</h3>
         <p style='font-size: 1.1em; line-height: 1.5;'>
             Através da nossa inteligência de dados, a fornecedora mais competitiva {saudacao} no Submercado {submercado_selecionado} para o produto <b>{tipo_energia}</b> é a <b>{melhor_com_mes}</b>.<br/>
-            Este parceiro garante uma economia imediata de <span class='destaque-ganho'>{perc_br(economia_mes_1_perc)}</span> já no primeiro ano ({ano_inicio_contrato}).
+            Este parceiro garante uma economia imediata de <span class='destaque-ganho'>{perc_br(economia_mes_1_perc)}</span> no ano inicial ({ano_inicio_contrato}).
         </p>
         <div style='font-size: 0.9em; color:#94A3B8; margin-top: 10px;'>👤 Consultor Responsável: {vendedor_responsavel}</div>
     </div>
@@ -498,7 +504,7 @@ if st.session_state.mostrar_resultados:
     ])
 
     with tab_resumo:
-        st.markdown("### Composição de Custos (Primeiro Ano)")
+        st.markdown(f"### Composição de Custos ({ano_inicio_contrato})")
         df_atual_peso = df_atual_peso[df_atual_peso["Valor"] > 0].copy()
         df_atual_peso["Peso (%)"] = (df_atual_peso["Valor"] / df_atual_peso["Valor"].sum()) * 100
 
@@ -535,20 +541,21 @@ if st.session_state.mostrar_resultados:
         for ano_idx in range(anos_reais):
             ano_civil_estudo = ano_corrente_calendario + ano_idx
             fator_distribuidora = (1 + 0.08) ** ano_idx
+            fator_gestao = (1 + 0.06) ** ano_idx
             
             if ambiente_atual == "Mercado Cativo":
                 custo_atual_projetado_ano = (fatura_mensal_atual * 12) * fator_distribuidora
-            else:
                 fator_energia_livre = (1 + 0.06) ** ano_idx
-                p_atual_livre = preco_energia_atual_livre * fator_energia_livre
+                preco_csv_do_ano = dados_precos[melhor_com_mes][ano_idx] * fator_energia_livre
+            else:
+                p_atual_livre = preco_energia_atual_livre 
                 _, _, fat_energia_ano_concorrente = decompor_item(consumo_total_ano_mwh * p_atual_livre)
                 custo_atual_projetado_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_concorrente
+                preco_csv_do_ano = dados_precos[melhor_com_mes][ano_idx]
                 
-            preco_csv_do_ano = dados_precos[melhor_com_mes][ano_idx]
             _, _, fatura_energia_ano_elumia = decompor_item(consumo_total_ano_mwh * preco_csv_do_ano)
             
             fatura_resid_ano = (fatura_residual_concessionaria_acl * 12) * fator_distribuidora
-            fator_gestao = (1 + 0.06) ** ano_idx
             fee_ano = (total_gestao_elumia_mes * 12) * fator_gestao
             custo_proposto_ano = fatura_resid_ano + fatura_energia_ano_elumia + fee_ano
             
