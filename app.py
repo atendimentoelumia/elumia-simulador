@@ -316,7 +316,6 @@ if not df_precos_globais.empty:
             dados_precos_auto[com] = precos_limpos
 
 if not comercializadoras:
-    st.sidebar.warning(f"⚠️ Valores não encontrados no arquivo CSV. Usando padrão.")
     comercializadoras = ["Casa dos Ventos Padrão", "Matrix Padrão"]
     dados_precos_auto = {
         "Casa dos Ventos Padrão": [180.0, 186.0, 192.5, 199.2, 206.1],
@@ -346,8 +345,15 @@ ano_inicio_contrato = st.sidebar.number_input("Ano de Início do Contrato", min_
 
 componentes = fetch_fatura_data(concessionaria, subgrupo, modalidade)
 
+# --- CONTROLE DE MEMÓRIA (SESSION STATE) ---
+if "mostrar_resultados" not in st.session_state:
+    st.session_state.mostrar_resultados = False
+
 st.sidebar.markdown("---")
 botao_calcular = st.sidebar.button("🚀 Gerar Diagnóstico Comercial", use_container_width=True, type="primary")
+
+if botao_calcular:
+    st.session_state.mostrar_resultados = True
 
 # --- ÁREA PRINCIPAL DA PLATAFORMA ---
 pld_dados = buscar_pld_internet()
@@ -366,8 +372,23 @@ if pld_dados:
 nome_cenario_base = "Mercado Cativo" if ambiente_atual == "Mercado Cativo" else "Contrato Atual"
 st.title(f"⚡ E-Lumia | Proposta: {nome_cenario_base} vs. E-Lumia")
 
-if botao_calcular:
+# A TELA SÓ É PROCESSADA SE A MEMÓRIA ESTIVER ATIVA
+if st.session_state.mostrar_resultados:
     
+    # 1. EXIBIÇÃO DA MATRIZ GLOBAL DE OFERTAS
+    st.subheader(f"🏢 Matriz Global de Ofertas Mapeadas para o Estudo ({tipo_energia})")
+    linhas_matriz_global = []
+    for com in comercializadoras:
+        row_data = {"Comercializadora": com}
+        for i in range(5):
+            ano_alvo = ano_inicio_contrato + i
+            row_data[f"{ano_alvo} (R$/MWh)"] = dados_precos[com][i]
+        linhas_matriz_global.append(row_data)
+
+    df_matriz_global_tela = pd.DataFrame(linhas_matriz_global)
+    format_dict_matriz = {f"{ano_inicio_contrato + i} (R$/MWh)": moeda_br for i in range(5)}
+    st.dataframe(df_matriz_global_tela.style.format(format_dict_matriz), use_container_width=True, hide_index=True)
+
     def decompor_item(valor_base):
         valor_com_imposto = valor_base / (1 - impostos_totais)
         imposto_calculado = valor_com_imposto * impostos_totais
@@ -413,14 +434,7 @@ if botao_calcular:
     dados_comparativo_fornecedores = []
     ano_corrente_calendario = ano_inicio_contrato
 
-    linhas_matriz_global = []
     for com in comercializadoras:
-        row_data = {"Comercializadora": com}
-        for i in range(5):
-            ano_alvo = ano_inicio_contrato + i
-            row_data[f"{ano_alvo} (R$/MWh)"] = dados_precos[com][i]
-        linhas_matriz_global.append(row_data)
-
         soma_economia_contrato = 0
         for ano_idx in range(anos_reais):
             fator_distribuidora = (1 + 0.08) ** ano_idx
@@ -574,8 +588,6 @@ if botao_calcular:
         col_c1, col_c2 = st.columns(2)
         with col_c1:
             st.caption("Matriz Base de Preços (R$/MWh)")
-            df_matriz_global_tela = pd.DataFrame(linhas_matriz_global)
-            format_dict_matriz = {f"{ano_inicio_contrato + i} (R$/MWh)": moeda_br for i in range(5)}
             st.dataframe(df_matriz_global_tela.style.format(format_dict_matriz), use_container_width=True, hide_index=True)
         with col_c2:
             st.caption("Ranking de Viabilidade por Comercializadora")
