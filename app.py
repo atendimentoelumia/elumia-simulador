@@ -271,6 +271,14 @@ consumo_total_mes_kwh = consumo_kwh_fp + consumo_kwh_p
 consumo_total_ano_mwh = (consumo_total_mes_kwh / 1000) * 12
 
 # --- INTEGRAÇÃO DO BANCO DE PREÇOS ---
+data_atualizacao_csv = "Data Indisponível"
+if os.path.exists(NOME_ARQUIVO_PRECOS):
+    timestamp_modificacao = os.path.getmtime(NOME_ARQUIVO_PRECOS)
+    data_atualizacao_csv = datetime.fromtimestamp(timestamp_modificacao).strftime('%d/%m/%Y às %H:%M')
+
+st.sidebar.subheader("🏢 Ofertas em Vigor")
+st.sidebar.caption(f"🔄 **Última atualização:** {data_atualizacao_csv}")
+
 df_precos_globais = load_precos_data()
 comercializadoras = []
 dados_precos_auto = {}
@@ -332,6 +340,9 @@ else:
 
 componentes = fetch_fatura_data(concessionaria, subgrupo, modalidade)
 
+st.sidebar.markdown("---")
+botao_calcular = st.sidebar.button("🚀 Gerar Diagnóstico Comercial", use_container_width=True, type="primary")
+
 # --- ÁREA PRINCIPAL DA PLATAFORMA ---
 pld_dados = buscar_pld_internet()
 if pld_dados:
@@ -349,421 +360,415 @@ if pld_dados:
 nome_cenario_base = "Mercado Cativo" if ambiente_atual == "Mercado Cativo" else "Contrato Atual"
 st.title(f"⚡ E-Lumia | Proposta: {nome_cenario_base} vs. E-Lumia")
 
-# 1. EXIBIÇÃO DA MATRIZ GLOBAL DE OFERTAS
-st.subheader(f"🏢 Matriz Global de Ofertas Mapeadas para o Estudo ({tipo_energia})")
-linhas_matriz_global = []
-for com in comercializadoras:
-    linhas_matriz_global.append({
-        "Comercializadora": com,
-        "2026 (R$/MWh)": dados_precos[com][0], "2027 (R$/MWh)": dados_precos[com][1],
-        "2028 (R$/MWh)": dados_precos[com][2], "2029 (R$/MWh)": dados_precos[com][3], "2030 (R$/MWh)": dados_precos[com][4],
-    })
-df_matriz_global_tela = pd.DataFrame(linhas_matriz_global)
-st.dataframe(df_matriz_global_tela.style.format({
-    "2026 (R$/MWh)": moeda_br, "2027 (R$/MWh)": moeda_br, "2028 (R$/MWh)": moeda_br, "2029 (R$/MWh)": moeda_br, "2030 (R$/MWh)": moeda_br
-}), use_container_width=True, hide_index=True)
-
-# --- EXECUÇÃO IMEDIATA DOS CÁLCULOS NA TELA (UX FLUIDO SÉRIO) ---
-def decompor_item(valor_base):
-    valor_com_imposto = valor_base / (1 - impostos_totais)
-    imposto_calculado = valor_com_imposto * impostos_totais
-    return valor_base, imposto_calculado, valor_com_imposto
-
-if modalidade == "Azul":
-    _, _, total_demanda_p_cat = decompor_item(demanda_ponta * componentes["tusd_demanda_p"])
-    _, _, total_demanda_fp_cat = decompor_item(demanda_fponta * componentes["tusd_demanda_fp"])
-    total_demanda_cat = total_demanda_p_cat + total_demanda_fp_cat
+if botao_calcular:
     
-    _, _, total_demanda_p_acl = decompor_item(demanda_ponta * componentes["tusd_demanda_p"] * fator_desconto_demanda)
-    _, _, total_demanda_fp_acl = decompor_item(demanda_fponta * componentes["tusd_demanda_fp"] * fator_desconto_demanda)
-    total_demanda_acl = total_demanda_p_acl + total_demanda_fp_acl
-else:
-    _, _, total_demanda_cat = decompor_item(demanda_unica * componentes["tusd_demanda"])
-    _, _, total_demanda_acl = decompor_item(demanda_unica * componentes["tusd_demanda"] * fator_desconto_demanda)
+    def decompor_item(valor_base):
+        valor_com_imposto = valor_base / (1 - impostos_totais)
+        imposto_calculado = valor_com_imposto * impostos_totais
+        return valor_base, imposto_calculado, valor_com_imposto
 
-_, _, total_tusd_p_cat = decompor_item(consumo_p * componentes["tusd_energia_p"])
-_, _, total_tusd_fp_cat = decompor_item(consumo_fp * componentes["tusd_energia_fp"])
-_, _, total_te_p_cat = decompor_item(consumo_p * componentes["te_p"])
-_, _, total_te_fp_cat = decompor_item(consumo_fp * componentes["te_fp"])
-
-if ambiente_atual == "Mercado Cativo":
-    fatura_mensal_cativa = total_demanda_cat + total_tusd_p_cat + total_tusd_fp_cat + total_te_p_cat + total_te_fp_cat
-    fatura_mensal_atual = fatura_mensal_cativa
-    df_atual_peso = pd.DataFrame({
-        "Componente": ["Demanda", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta"],
-        "Valor": [total_demanda_cat, total_tusd_p_cat, total_tusd_fp_cat, total_te_p_cat, total_te_fp_cat]
-    })
-else: 
-    fatura_mensal_cativa = total_demanda_cat + total_tusd_p_cat + total_tusd_fp_cat + total_te_p_cat + total_te_fp_cat
-    _, _, total_energia_atual_concorrente = decompor_item((consumo_total_mes_kwh / 1000) * preco_energia_atual_livre)
-    fatura_mensal_atual = total_demanda_acl + total_tusd_p_cat + total_tusd_fp_cat + total_energia_atual_concorrente
-    df_atual_peso = pd.DataFrame({
-        "Componente": ["Demanda (TUSD c/ Desc)", "TUSD Ponta", "TUSD F. Ponta", "Energia Atual Concorrente"],
-        "Valor": [total_demanda_acl, total_tusd_p_cat, total_tusd_fp_cat, total_energia_atual_concorrente]
-    })
-
-fatura_residual_concessionaria_acl = total_demanda_acl + total_tusd_p_cat + total_tusd_fp_cat
-_, _, total_gestao_elumia_mes = decompor_item((consumo_total_mes_kwh / 1000) * fee_elumia_mwh)
-
-anos_reais = int(tempo_contrato / 12)
-dados_comparativo_fornecedores = []
-ano_corrente_calendario = 2026
-
-for com in comercializadoras:
-    soma_economia_contrato = 0
-    for ano_idx in range(anos_reais):
-        fator_distribuidora = (1 + 0.08) ** ano_idx
+    if modalidade == "Azul":
+        _, _, total_demanda_p_cat = decompor_item(demanda_ponta * componentes["tusd_demanda_p"])
+        _, _, total_demanda_fp_cat = decompor_item(demanda_fponta * componentes["tusd_demanda_fp"])
+        total_demanda_cat = total_demanda_p_cat + total_demanda_fp_cat
         
-        if ambiente_atual == "Mercado Cativo":
-            custo_atual_projetado_ano = (fatura_mensal_atual * 12) * fator_distribuidora
-        else:
-            p_atual_livre = preco_energia_atual_livre
-            _, _, fat_energia_ano_concorrente = decompor_item(consumo_total_ano_mwh * p_atual_livre)
-            custo_atual_projetado_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_concorrente
-        
-        preco_csv_do_ano = dados_precos[com][ano_idx]
-        _, _, fatura_energia_ano_elumia = decompor_item(consumo_total_ano_mwh * preco_csv_do_ano)
-        
-        fator_gestao = (1 + 0.06) ** ano_idx
-        custo_proposto_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_elumia + ((total_gestao_elumia_mes * 12) * fator_gestao)
-        soma_economia_contrato += (custo_atual_projetado_ano - custo_proposto_ano)
-        
-    eco_media_ano = soma_economia_contrato / (tempo_contrato / 12)
-    eco_media_mes = eco_media_ano / 12
-    
-    preco_ano1 = dados_precos[com][0]
-    _, _, tot_eng = decompor_item((consumo_total_mes_kwh / 1000) * preco_ano1)
-    c_livre_mes_1 = fatura_residual_concessionaria_acl + tot_eng + total_gestao_elumia_mes
+        _, _, total_demanda_p_acl = decompor_item(demanda_ponta * componentes["tusd_demanda_p"] * fator_desconto_demanda)
+        _, _, total_demanda_fp_acl = decompor_item(demanda_fponta * componentes["tusd_demanda_fp"] * fator_desconto_demanda)
+        total_demanda_acl = total_demanda_p_acl + total_demanda_fp_acl
+    else:
+        _, _, total_demanda_cat = decompor_item(demanda_unica * componentes["tusd_demanda"])
+        _, _, total_demanda_acl = decompor_item(demanda_unica * componentes["tusd_demanda"] * fator_desconto_demanda)
 
-    dados_comparativo_fornecedores.append({
-        "Comercializadora": com,
-        "Economia Média Mês (R$)": eco_media_mes,
-        "Economia Média Ano (R$)": eco_media_ano,
-        "Economia Total Contrato (R$)": soma_economia_contrato,
-        "Custo_Total_Ordenacao": c_livre_mes_1 
-    })
+    _, _, total_tusd_p_cat = decompor_item(consumo_p * componentes["tusd_energia_p"])
+    _, _, total_tusd_fp_cat = decompor_item(consumo_fp * componentes["tusd_energia_fp"])
+    _, _, total_te_p_cat = decompor_item(consumo_p * componentes["te_p"])
+    _, _, total_te_fp_cat = decompor_item(consumo_fp * componentes["te_fp"])
 
-melhor_fornecedor_row = max(dados_comparativo_fornecedores, key=lambda x: x["Economia Total Contrato (R$)"])
-melhor_com_mes = melhor_fornecedor_row["Comercializadora"]
-
-preco_ano1_melhor = dados_precos[melhor_com_mes][0]
-_, _, total_energia_mes_melhor = decompor_item((consumo_total_mes_kwh / 1000) * preco_ano1_melhor)
-custo_total_acl_melhor_mes = fatura_residual_concessionaria_acl + total_energia_mes_melhor + total_gestao_elumia_mes
-economia_mes_1_perc = ((fatura_mensal_atual - custo_total_acl_melhor_mes) / fatura_mensal_atual) * 100
-
-saudacao = f"para o cliente <b>{nome_cliente}</b>" if nome_cliente else ""
-st.markdown(f"""
-<div class="card-vendas">
-    <h3 style='margin-top: 0px; margin-bottom: 5px; color: #60A5FA;'>🏆 Match Ideal Encontrado!</h3>
-    <p style='font-size: 1.1em; line-height: 1.5;'>
-        Através da nossa inteligência de dados, a fornecedora mais competitiva {saudacao} no Submercado {submercado_selecionado} para o produto <b>{tipo_energia}</b> é a <b>{melhor_com_mes}</b>.<br/>
-        Este parceiro garante uma economia imediata de <span class='destaque-ganho'>{perc_br(economia_mes_1_perc)}</span> já no primeiro ano.
-    </p>
-    <div style='font-size: 0.9em; color:#94A3B8; margin-top: 10px;'>👤 Consultor Responsável: {vendedor_responsavel}</div>
-</div>
-""", unsafe_allow_html=True)
-
-tab_resumo, tab_projecao, tab_concorrencia, tab_bandeiras = st.tabs([
-    "📊 1. Resumo Executivo", 
-    "📈 2. Projeção Financeira", 
-    "🏢 3. Cenário de Mercado", 
-    "🚩 4. Blindagem Tarifária"
-])
-
-with tab_resumo:
-    st.markdown("### Composição de Custos (Primeiro Ano)")
-    df_atual_peso = df_atual_peso[df_atual_peso["Valor"] > 0].copy()
-    df_atual_peso["Peso (%)"] = (df_atual_peso["Valor"] / df_atual_peso["Valor"].sum()) * 100
-
-    df_livre_peso = pd.DataFrame({
-        "Componente": ["Demanda (TUSD c/ Desc)", "TUSD Ponta", "TUSD F. Ponta", "Energia Proposta ACL", "Gestão E-Lumia"],
-        "Valor": [total_demanda_acl, total_tusd_p_cat, total_tusd_fp_cat, total_energia_mes_melhor, total_gestao_elumia_mes]
-    })
-    df_livre_peso = df_livre_peso[df_livre_peso["Valor"] > 0]
-    df_livre_peso["Peso (%)"] = (df_livre_peso["Valor"] / df_livre_peso["Valor"].sum()) * 100
-
-    col_g1, col_g2 = st.columns(2)
-    with col_g1:
-        fig_cat = px.pie(df_atual_peso, values='Valor', names='Componente', title="Cenário Base (Atual)", hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
-        fig_cat.update_traces(textposition='inside', textinfo='percent+label', marker=dict(line=dict(color='#0F172A', width=2)))
-        fig_cat.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="white")
-        st.plotly_chart(fig_cat, use_container_width=True)
-        df_atual_peso_tela = pd.concat([df_atual_peso, pd.DataFrame([{"Componente": "SOMA DA FATURA (TOTAL)", "Valor": fatura_mensal_atual, "Peso (%)": 100.0}])], ignore_index=True)
-        st.dataframe(df_atual_peso_tela.style.format({"Valor": moeda_br, "Peso (%)": perc_br}), hide_index=True, use_container_width=True)
-
-    with col_g2:
-        fig_liv = px.pie(df_livre_peso, values='Valor', names='Componente', title=f"Proposta E-Lumia ({melhor_com_mes})", hole=0.4, color_discrete_sequence=px.colors.sequential.Greens_r)
-        fig_liv.update_traces(textposition='inside', textinfo='percent+label', marker=dict(line=dict(color='#0F172A', width=2)))
-        fig_liv.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="white")
-        st.plotly_chart(fig_liv, use_container_width=True)
-        df_livre_peso_tela = pd.concat([df_livre_peso, pd.DataFrame([{"Componente": "SOMA DA FATURA (TOTAL)", "Valor": custo_total_acl_melhor_mes, "Peso (%)": 100.0}])], ignore_index=True)
-        st.dataframe(df_livre_peso_tela.style.format({"Valor": moeda_br, "Peso (%)": perc_br}), hide_index=True, use_container_width=True)
-
-with tab_projecao:
-    st.markdown("### Projeção Financeira e Estudo de Economia")
-    linhas_proj_mensal = []
-    custo_atual_acumulado_total = 0
-    custo_livre_acumulado_total = 0
-
-    for ano_idx in range(anos_reais):
-        ano_civil_estudo = ano_corrente_calendario + ano_idx
-        fator_distribuidora = (1 + 0.08) ** ano_idx
-        fator_gestao = (1 + 0.06) ** ano_idx
-        
-        if ambiente_atual == "Mercado Cativo":
-            custo_atual_projetado_ano = (fatura_mensal_atual * 12) * fator_distribuidora
-        else:
-            p_atual_livre = preco_energia_atual_livre
-            _, _, fat_energia_ano_concorrente = decompor_item(consumo_total_ano_mwh * p_atual_livre)
-            custo_atual_projetado_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_concorrente
-            
-        preco_csv_do_ano = dados_precos[melhor_com_mes][ano_idx]
-        _, _, fatura_energia_ano_elumia = decompor_item(consumo_total_ano_mwh * preco_csv_do_ano)
-        
-        fatura_resid_ano = (fatura_residual_concessionaria_acl * 12) * fator_distribuidora
-        fee_ano = (total_gestao_elumia_mes * 12) * fator_gestao
-        custo_proposto_ano = fatura_resid_ano + fatura_energia_ano_elumia + fee_ano
-        
-        custo_atual_acumulado_total += custo_atual_projetado_ano
-        custo_livre_acumulado_total += custo_proposto_ano
-        
-        pago_mensal_atual = custo_atual_projetado_ano / 12
-        pago_mensal_proposto = custo_proposto_ano / 12
-        economia_reais_mes = pago_mensal_atual - pago_mensal_proposto
-        economia_perc_mes = (economia_reais_mes / pago_mensal_atual) * 100
-        
-        linhas_proj_mensal.append({
-            "Ano": str(ano_civil_estudo),
-            "Média Mensal Base (R$/mês)": pago_mensal_atual,
-            "Média Mensal E-Lumia (R$/mês)": pago_mensal_proposto,
-            "Economia Média Mensal (R$/mês)": economia_reais_mes,
-            "Economia (%)": economia_perc_mes
+    if ambiente_atual == "Mercado Cativo":
+        fatura_mensal_cativa = total_demanda_cat + total_tusd_p_cat + total_tusd_fp_cat + total_te_p_cat + total_te_fp_cat
+        fatura_mensal_atual = fatura_mensal_cativa
+        df_atual_peso = pd.DataFrame({
+            "Componente": ["Demanda", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta"],
+            "Valor": [total_demanda_cat, total_tusd_p_cat, total_tusd_fp_cat, total_te_p_cat, total_te_fp_cat]
+        })
+    else: 
+        fatura_mensal_cativa = total_demanda_cat + total_tusd_p_cat + total_tusd_fp_cat + total_te_p_cat + total_te_fp_cat
+        _, _, total_energia_atual_concorrente = decompor_item((consumo_total_mes_kwh / 1000) * preco_energia_atual_livre)
+        fatura_mensal_atual = total_demanda_acl + total_tusd_p_cat + total_tusd_fp_cat + total_energia_atual_concorrente
+        df_atual_peso = pd.DataFrame({
+            "Componente": ["Demanda (TUSD c/ Desc)", "TUSD Ponta", "TUSD F. Ponta", "Energia Atual Concorrente"],
+            "Valor": [total_demanda_acl, total_tusd_p_cat, total_tusd_fp_cat, total_energia_atual_concorrente]
         })
 
-    df_estudo_integral_mensal = pd.DataFrame(linhas_proj_mensal)
-    
-    fig_bar = px.bar(
-        df_estudo_integral_mensal, x='Ano', y=['Média Mensal Base (R$/mês)', 'Média Mensal E-Lumia (R$/mês)'], barmode='group',
-        title="Evolução do Custo: Fatura Atual vs. Proposta", labels={'value': 'Custo Mensal Estimado (R$)', 'variable': 'Cenário'},
-        color_discrete_map={'Média Mensal Base (R$/mês)': '#ef4444', 'Média Mensal E-Lumia (R$/mês)': '#22c55e'}
-    )
-    fig_bar.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="white", legend_title_text='')
-    st.plotly_chart(fig_bar, use_container_width=True)
+    fatura_residual_concessionaria_acl = total_demanda_acl + total_tusd_p_cat + total_tusd_fp_cat
+    _, _, total_gestao_elumia_mes = decompor_item((consumo_total_mes_kwh / 1000) * fee_elumia_mwh)
 
-    st.dataframe(df_estudo_integral_mensal.style.format({
-        "Média Mensal Base (R$/mês)": moeda_br, "Média Mensal E-Lumia (R$/mês)": moeda_br, 
-        "Economia Média Mensal (R$/mês)": moeda_br, "Economia (%)": perc_br
-    }), use_container_width=True, hide_index=True)
+    anos_reais = int(tempo_contrato / 12)
+    dados_comparativo_fornecedores = []
+    ano_corrente_calendario = 2026
 
-with tab_conconcorrencia:
-    st.markdown("### Inteligência de Mercado: Matriz de Fornecedores")
-    col_c1, col_c2 = st.columns(2)
-    with col_c1:
-        st.caption("Matriz Base de Preços (R$/MWh)")
-        df_matriz_global_tela = pd.DataFrame(linhas_matriz_global)
-        st.dataframe(df_matriz_global_tela.style.format({
-            "2026 (R$/MWh)": moeda_br, "2027 (R$/MWh)": moeda_br, "2028 (R$/MWh)": moeda_br, "2029 (R$/MWh)": moeda_br, "2030 (R$/MWh)": moeda_br
-        }), use_container_width=True, hide_index=True)
-    with col_c2:
-        st.caption("Ranking de Viabilidade por Comercializadora")
-        df_fornecedores_tela = pd.DataFrame(dados_comparativo_fornecedores).sort_values("Economia Total Contrato (R$)", ascending=False)
-        st.dataframe(df_fornecedores_tela[['Comercializadora', 'Economia Média Mês (R$)', 'Economia Média Ano (R$)', 'Economia Total Contrato (R$)']].style.format({
-            "Economia Média Mês (R$)": moeda_br, "Economia Média Ano (R$)": moeda_br, "Economia Total Contrato (R$)": moeda_br
-        }), use_container_width=True, hide_index=True)
-
-with tab_bandeiras:
-    st.markdown(f"### 🚩 Blindagem contra Bandeiras Tarifárias (Garantia E-Lumia)")
-    BANDEIRAS = {"Bandeira Verde": 0.0, "Bandeira Amarela": 18.85, "Bandeira Vermelha 1": 44.63, "Bandeira Vermelha 2": 78.77}
-    linhas_bandeiras = []
-    for nome_bandeira, valor_mwh in BANDEIRAS.items():
-        _, _, acrescimo_bandeira_com_imposto = decompor_item((consumo_total_mes_kwh / 1000) * valor_mwh)
-        cativo_com_bandeira = fatura_mensal_cativa + acrescimo_bandeira_com_imposto
-        economia_bandeira_reais = cativo_com_bandeira - custo_total_acl_melhor_mes
-        economia_bandeira_perc = (economia_bandeira_reais / cativo_com_bandeira) * 100
-        linhas_bandeiras.append({
-            "Cenário Hídrico": nome_bandeira, "Custo Cativo Estimado (c/ Bandeira)": cativo_com_bandeira,
-            "Custo Mensal Proposta E-Lumia": custo_total_acl_melhor_mes, "Economia Mensal Gerada (R$)": economia_bandeira_reais, "Economia (%)": economia_bandeira_perc
+    linhas_matriz_global = []
+    for com in comercializadoras:
+        linhas_matriz_global.append({
+            "Comercializadora": com,
+            "2026 (R$/MWh)": dados_precos[com][0], "2027 (R$/MWh)": dados_precos[com][1],
+            "2028 (R$/MWh)": dados_precos[com][2], "2029 (R$/MWh)": dados_precos[com][3], "2030 (R$/MWh)": dados_precos[com][4],
         })
-    df_bandeiras = pd.DataFrame(linhas_bandeiras)
-    st.dataframe(df_bandeiras.style.format({
-        "Custo Cativo Estimado (c/ Bandeira)": moeda_br, "Custo Mensal Proposta E-Lumia": moeda_br,
-        "Economia Mensal Gerada (R$)": moeda_br, "Economia (%)": perc_br
-    }), use_container_width=True, hide_index=True)
-
-st.markdown("<br/>", unsafe_allow_html=True)
-k_final1, k_final2, k_final3 = st.columns(3)
-k_final1.metric(f"Gasto Total Acumulado Estimado ({ambiente_atual})", moeda_br(custo_atual_acumulado_total))
-k_final2.metric(f"Gasto Total Acumulado Otimizado ({melhor_com_mes})", moeda_br(custo_livre_acumulado_total))
-k_final3.metric("Patrimônio Total Recuperado", moeda_br(custo_atual_acumulado_total - custo_livre_acumulado_total), delta="Economia Gerada para o Cliente")
-
-# --- MOTOR DO PDF PAISAGEM ---
-def draw_pdf_pie(df_peso, title_text):
-    d = Drawing(300, 160)
-    pc = Pie()
-    pc.x = 60
-    pc.y = 20
-    pc.width = 120
-    pc.height = 120
-    pc.data = df_peso['Valor'].tolist()
-    rotulos = []
-    for i, row in df_peso.iterrows():
-        rotulos.append(f"{row['Componente']} ({perc_br(row['Peso (%)'])})")
-    pc.labels = rotulos
-    pc.sideLabels = 1
-    pc.slices.strokeWidth = 0.5
-    if "Base" in title_text or "Atual" in title_text:
-        pc.slices[0].fillColor = colors.HexColor("#ef4444") 
-        pc.slices[3].fillColor = colors.HexColor("#f87171") 
-    else:
-        pc.slices[3].fillColor = colors.HexColor("#22c55e") 
-        pc.slices[4].fillColor = colors.HexColor("#3b82f6") 
-    title = String(120, 150, title_text)
-    title.fontName = 'Helvetica-Bold'
-    title.fontSize = 11
-    title.textAnchor = 'middle' 
-    d.add(title)
-    d.add(pc)
-    return d
-
-def build_pdf():
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
-    styles = getSampleStyleSheet()
-    title_style_left = ParagraphStyle('TitleStyleLeft', fontName='Helvetica-Bold', fontSize=16, textColor=colors.HexColor("#1A365D"), alignment=2)
-    h2_style = ParagraphStyle('H2Style', parent=styles['Heading2'], fontSize=11, textColor=colors.HexColor("#1E3A8A"), spaceBefore=12, spaceAfter=6, fontName='Helvetica-Bold')
-    card_style = ParagraphStyle('Card', fontSize=12, textColor=colors.whitesmoke, alignment=1)
-    
-    story = []
-    if os.path.exists("logo.png"):
-        logo_element = Image("logo.png", width=120, height=40)
-    else:
-        logo_style = ParagraphStyle('LogoStyle', fontName='Helvetica-Bold', fontSize=18, textColor=colors.HexColor("#3B82F6"))
-        logo_element = Paragraph("⚡ E-LUMIA", logo_style)
         
-    title_p = Paragraph("PROPOSTA EXECUTIVA - MERCADO LIVRE DE ENERGIA", title_style_left)
-    header_table = Table([[logo_element, title_p]], colWidths=[200, 532])
-    header_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (1,0), (1,0), 'RIGHT')]))
-    story.append(header_table)
-    story.append(Spacer(1, 15))
-    
-    if pld_dados:
-        story.append(Paragraph(f"Termômetro de Exposição CCEE | PLD Médio - {pld_dados['mes_ref']}", h2_style))
-        pld_headers = [formatar_pld("Sudeste", 0), formatar_pld("Sul", 0), formatar_pld("Nordeste", 0), formatar_pld("Norte", 0)]
-        pld_values = [moeda_br(pld_dados['Sudeste']), moeda_br(pld_dados['Sul']), moeda_br(pld_dados['Nordeste']), moeda_br(pld_dados['Norte'])]
-        t_pld = Table([pld_headers, pld_values], colWidths=[183, 183, 183, 183])
-        t_pld.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#1E293B")), ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor("#94A3B8")),
-            ('TEXTCOLOR', (0,1), (-1,1), colors.whitesmoke), ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-            ('FONTNAME', (0,1), (-1,1), 'Helvetica-Bold'), ('FONTSIZE', (0,1), (-1,1), 12),
-            ('GRID', (0,0), (-1,-1), 1, colors.HexColor("#334155"))
-        ]))
-        story.append(t_pld)
-        story.append(Spacer(1, 15))
-
-    if nome_cliente or cnpj_input:
-        card_text = f"<font color='#3B82F6'><b>DIAGNÓSTICO COMERCIAL EXECUTIVO</b></font><br/><br/>Parceiro mais competitivo selecionado para <b>{nome_cliente}</b> no Submercado <b>{submercado_selecionado}</b> para o produto <b>{tipo_energia}</b>:<br/><b>{melhor_com_mes}</b> com economia de <b>{perc_br(economia_mes_1_perc)}</b> em 2026.<br/><br/><font size='10' color='#94A3B8'>Consultor Responsável: {vendedor_responsavel}</font>"
-        t_card = Table([[Paragraph(card_text, card_style)]], colWidths=[732])
-        t_card.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#1E293B")), ('ALIGN', (0,0), (-1,-1), 'CENTER'), ('LINEBEFORE', (0,0), (0,-1), 6, colors.HexColor("#3B82F6"))]))
-        story.append(t_card)
-        story.append(Spacer(1, 15))
-
-    story.append(Paragraph("1. Matriz Global de Ofertas Mapeadas (Anual)", h2_style))
-    pdf_matriz_data = [["Comercializadora", "2026", "2027", "2028", "2029", "2030"]]
-    for row in linhas_matriz_global:
-        pdf_matriz_data.append([row["Comercializadora"], moeda_br(row['2026 (R$/MWh)']), moeda_br(row['2027 (R$/MWh)']), moeda_br(row['2028 (R$/MWh)']), moeda_br(row['2029 (R$/MWh)']), moeda_br(row['2030 (R$/MWh)'])])
-    t_matriz = Table(pdf_matriz_data, colWidths=[182, 110, 110, 110, 110, 110])
-    t_matriz.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke), ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey), ('FONTSIZE', (0,0), (-1,-1), 9)]))
-    story.append(t_matriz)
-    story.append(Spacer(1, 10))
-
-    story.append(Paragraph(f"2. Composição de Custos Mensais (Cenário Base vs Proposta)", h2_style))
-    grafico_cativo = draw_pdf_pie(df_atual_peso, "Cenário Base")
-    grafico_livre = draw_pdf_pie(df_livre_peso, f"Proposta E-Lumia")
-    tabela_graficos = Table([[grafico_cativo, grafico_livre]], colWidths=[366, 366])
-    story.append(tabela_graficos)
-    story.append(Spacer(1, 10))
-
-    pdf_fatura_data = [["Estrutura de Custo", "Cenário Base (Atual)", "Peso (%)", f"Proposta E-Lumia", "Peso (%)"]]
-    linhas_custo = ["Demanda", "Demanda (TUSD c/ Desc)", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta", "Energia Atual Concorrente", "Energia Proposta ACL", "Gestão E-Lumia"]
-    def acha_valor(df, comp):
-        linha = df[df["Componente"] == comp]
-        if not linha.empty: return moeda_br(linha.iloc[0]['Valor']), perc_br(linha.iloc[0]['Peso (%)'])
-        return "-", "-"
-    for c in linhas_custo:
-        val_cat, peso_cat = acha_valor(df_atual_peso, c)
-        val_liv, peso_liv = acha_valor(df_livre_peso, c)
-        if val_cat != "-" or val_liv != "-": pdf_fatura_data.append([c, val_cat, peso_cat, val_liv, peso_liv])
-    pdf_fatura_data.append(["SOMA DA FATURA (TOTAL)", moeda_br(fatura_mensal_atual), "100,0%", moeda_br(custo_total_acl_melhor_mes), "100,0%"])
-    t_fatura = Table(pdf_fatura_data, colWidths=[232, 150, 100, 150, 100])
-    t_fatura.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke), ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey), ('FONTSIZE', (0,0), (-1,-1), 9), ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#F8FAFC")), ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold')]))
-    story.append(t_fatura)
-    story.append(Spacer(1, 15))
-
-    story.append(Paragraph("3. Estudo Cronológico: Média Mensal Paga por Ano", h2_style))
-    proj_data = [["Ano", "Média Mensal Base", "Média Mensal Proposta", "Economia Mês (R$)", "Economia (%)"]]
-    for row in linhas_proj_mensal:
-        proj_data.append([row["Ano"], moeda_br(row['Média Mensal Base (R$/mês)']), moeda_br(row['Média Mensal E-Lumia (R$/mês)']), moeda_br(row['Economia Média Mensal (R$/mês)']), perc_br(row['Economia (%)'])])
-    t_proj = Table(proj_data, colWidths=[132, 150, 150, 150, 150])
-    t_proj.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke), ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey), ('FONTSIZE', (0,0), (-1,-1), 9), ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#16A34A")), ('TEXTCOLOR', (0,-1), (-1,-1), colors.whitesmoke), ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold')]))
-    story.append(t_proj)
-    story.append(Spacer(1, 15))
-
-    story.append(Paragraph("4. Blindagem contra Bandeiras Tarifárias", h2_style))
-    pdf_bandeiras_data = [["Cenário Hídrico", "Custo Estimado (c/ Band.)", f"Proposta E-Lumia", "Economia (R$)", "Economia (%)"]]
-    for row in linhas_bandeiras:
-        pdf_bandeiras_data.append([row["Cenário Hídrico"], moeda_br(row['Custo Cativo Estimado (c/ Bandeira)']), moeda_br(row['Custo Mensal Proposta E-Lumia']), moeda_br(row['Economia Mensal Gerada (R$)']), perc_br(row['Economia (%)'])])
-    t_band = Table(pdf_bandeiras_data, colWidths=[132, 150, 150, 150, 150])
-    t_band.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke), ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey), ('FONTSIZE', (0,0), (-1,-1), 9), ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#16A34A")), ('TEXTCOLOR', (0,-1), (-1,-1), colors.whitesmoke), ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold')]))
-    story.append(t_band)
-    story.append(Spacer(1, 15))
-
-    story.append(Paragraph("5. Comparativo de Viabilidade por Comercializadora", h2_style))
-    pdf_com_forn_data = [["Comercializadora", "Média Econ. Mês", "Média Econ. Ano", "Total Contrato"]]
-    for r_com in dados_comparativo_fornecedores:
-        pdf_com_forn_data.append([r_com["Comercializadora"], moeda_br(r_com['Economia Média Mês (R$)']), moeda_br(r_com['Economia Média Ano (R$)']), moeda_br(r_com['Economia Total Contrato (R$)'])])
-    t_forn = Table(pdf_com_forn_data, colWidths=[222, 170, 170, 170])
-    t_forn.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke), ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey), ('FONTSIZE', (0,0), (-1,-1), 9)]))
-    story.append(t_forn)
-    story.append(Spacer(1, 20))
-
-    kpi_values = [moeda_br(custo_atual_acumulado_total), moeda_br(custo_livre_acumulado_total), moeda_br(custo_atual_acumulado_total - custo_livre_acumulado_total)]
-    t_kpi = Table([[f"Gasto Acumulado ({ambiente_atual})", f"Gasto Acumulado E-Lumia", "Patrimônio Total Recuperado"], kpi_values], colWidths=[244, 244, 244])
-    t_kpi.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#0F172A")), ('BACKGROUND', (0,1), (-1,1), colors.HexColor("#1E293B")), ('TEXTCOLOR', (0,0), (-1,-1), colors.whitesmoke), ('ALIGN', (0,0), (-1,-1), 'CENTER'), ('FONTNAME', (0,1), (-1,1), 'Helvetica-Bold'), ('FONTSIZE', (0,1), (-1,1), 14), ('GRID', (0,0), (-1,-1), 2, colors.white)]))
-    story.append(t_kpi)
-    return buffer.getvalue()
-
-# --- NOVO: CENTRAL DE FECHAMENTO COM CONTROLE DE ARQUIVAMENTO MANUAL ---
-st.markdown("---")
-st.subheader("🖨️ Central de Apresentação e Fechamento de Propostas")
-st.caption("Utilize os botões abaixo para interagir de forma controlada com o repositório oficial da empresa.")
-
-col_pdf_down, col_drive_up = st.columns(2)
-
-with col_pdf_down:
-    # Geramos o PDF sob demanda para download local
-    pdf_bytes = build_pdf()
-    nome_cliente_limpo = re.sub(r'[\\/*?:"<>|.]', '', nome_cliente).replace(' ', '_') if nome_cliente else "Cliente"
-    nome_arquivo_manual = f"Estudo_Viabilidade_{nome_cliente_limpo}_{vendedor_responsavel}.pdf"
-    
-    st.download_button(
-        label="📄 Baixar Proposta Executiva Oficial (PDF Local)",
-        data=pdf_bytes,
-        file_name=nome_arquivo_manual,
-        mime="application/pdf",
-        use_container_width=True
-    )
-
-with col_drive_up:
-    # O GATILHO SOLICITADO: O arquivo só vai pro Drive quando o vendedor explicitamente confirmar!
-    if st.button("💾 Arquivar Versão Oficial no Google Drive", use_container_width=True, type="secondary"):
-        # Incluímos Hora e Minutos no nome para nunca sobrescrever se ele salvar mais de uma versão
-        timestamp_oficial = datetime.now().strftime("%d-%m-%Y_%Hh%M")
-        nome_arquivamento_drive = f"Proposta_{nome_cliente_limpo}_{vendedor_responsavel}_{timestamp_oficial}.pdf"
-        
-        with st.spinner("Conectando ao Google Drive da E-Lumia..."):
-            status_upload = upload_automatico_drive(pdf_bytes, nome_arquivamento_drive)
+        soma_economia_contrato = 0
+        for ano_idx in range(anos_reais):
+            fator_distribuidora = (1 + 0.08) ** ano_idx
             
-        if status_upload is True:
-            st.success(f"✅ Sucesso! Versão cravada e arquivada como: '{nome_arquivamento_drive}'")
+            if ambiente_atual == "Mercado Cativo":
+                custo_atual_projetado_ano = (fatura_mensal_atual * 12) * fator_distribuidora
+            else:
+                fator_energia_livre = (1 + 0.06) ** ano_idx
+                p_atual_livre = preco_energia_atual_livre * fator_energia_livre
+                _, _, fat_energia_ano_concorrente = decompor_item(consumo_total_ano_mwh * p_atual_livre)
+                custo_atual_projetado_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_concorrente
+            
+            preco_csv_do_ano = dados_precos[com][ano_idx]
+            _, _, fatura_energia_ano_elumia = decompor_item(consumo_total_ano_mwh * preco_csv_do_ano)
+            
+            fator_gestao = (1 + 0.06) ** ano_idx
+            custo_proposto_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fatura_energia_ano_elumia + ((total_gestao_elumia_mes * 12) * fator_gestao)
+            
+            soma_economia_contrato += (custo_atual_projetado_ano - custo_proposto_ano)
+            
+        eco_media_ano = soma_economia_contrato / (tempo_contrato / 12)
+        eco_media_mes = eco_media_ano / 12
+        
+        preco_ano1 = dados_precos[com][0]
+        _, _, tot_eng = decompor_item((consumo_total_mes_kwh / 1000) * preco_ano1)
+        c_livre_mes_1 = fatura_residual_concessionaria_acl + tot_eng + total_gestao_elumia_mes
+
+        dados_comparativo_fornecedores.append({
+            "Comercializadora": com,
+            "Economia Média Mês (R$)": eco_media_mes,
+            "Economia Média Ano (R$)": eco_media_ano,
+            "Economia Total Contrato (R$)": soma_economia_contrato,
+            "Custo_Total_Ordenacao": c_livre_mes_1 
+        })
+
+    melhor_fornecedor_row = max(dados_comparativo_fornecedores, key=lambda x: x["Economia Total Contrato (R$)"])
+    melhor_com_mes = melhor_fornecedor_row["Comercializadora"]
+
+    preco_ano1_melhor = dados_precos[melhor_com_mes][0]
+    _, _, total_energia_mes_melhor = decompor_item((consumo_total_mes_kwh / 1000) * preco_ano1_melhor)
+    custo_total_acl_melhor_mes = fatura_residual_concessionaria_acl + total_energia_mes_melhor + total_gestao_elumia_mes
+    economia_mes_1_perc = ((fatura_mensal_atual - custo_total_acl_melhor_mes) / fatura_mensal_atual) * 100
+
+    saudacao = f"para o cliente <b>{nome_cliente}</b>" if nome_cliente else ""
+    st.markdown(f"""
+    <div class="card-vendas">
+        <h3 style='margin-top: 0px; margin-bottom: 5px; color: #60A5FA;'>🏆 Match Ideal Encontrado!</h3>
+        <p style='font-size: 1.1em; line-height: 1.5;'>
+            Através da nossa inteligência de dados, a fornecedora mais competitiva {saudacao} no Submercado {submercado_selecionado} para o produto <b>{tipo_energia}</b> é a <b>{melhor_com_mes}</b>.<br/>
+            Este parceiro garante uma economia imediata de <span class='destaque-ganho'>{perc_br(economia_mes_1_perc)}</span> já no primeiro ano.
+        </p>
+        <div style='font-size: 0.9em; color:#94A3B8; margin-top: 10px;'>👤 Consultor Responsável: {vendedor_responsavel}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    tab_resumo, tab_projecao, tab_concorrencia, tab_bandeiras = st.tabs([
+        "📊 1. Resumo Executivo", 
+        "📈 2. Projeção Financeira", 
+        "🏢 3. Cenário de Mercado", 
+        "🚩 4. Blindagem Tarifária"
+    ])
+
+    with tab_resumo:
+        st.markdown("### Composição de Custos (Primeiro Ano)")
+        df_atual_peso = df_atual_peso[df_atual_peso["Valor"] > 0].copy()
+        df_atual_peso["Peso (%)"] = (df_atual_peso["Valor"] / df_atual_peso["Valor"].sum()) * 100
+
+        df_livre_peso = pd.DataFrame({
+            "Componente": ["Demanda (TUSD c/ Desc)", "TUSD Ponta", "TUSD F. Ponta", "Energia Proposta ACL", "Gestão E-Lumia"],
+            "Valor": [total_demanda_acl, total_tusd_p_cat, total_tusd_fp_cat, total_energia_mes_melhor, total_gestao_elumia_mes]
+        })
+        df_livre_peso = df_livre_peso[df_livre_peso["Valor"] > 0]
+        df_livre_peso["Peso (%)"] = (df_livre_peso["Valor"] / df_livre_peso["Valor"].sum()) * 100
+
+        col_g1, col_g2 = st.columns(2)
+        with col_g1:
+            fig_cat = px.pie(df_atual_peso, values='Valor', names='Componente', title="Cenário Base (Atual)", hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
+            fig_cat.update_traces(textposition='inside', textinfo='percent+label', marker=dict(line=dict(color='#0F172A', width=2)))
+            fig_cat.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="white")
+            st.plotly_chart(fig_cat, use_container_width=True)
+            df_atual_peso_tela = pd.concat([df_atual_peso, pd.DataFrame([{"Componente": "SOMA DA FATURA (TOTAL)", "Valor": fatura_mensal_atual, "Peso (%)": 100.0}])], ignore_index=True)
+            st.dataframe(df_atual_peso_tela.style.format({"Valor": moeda_br, "Peso (%)": perc_br}), hide_index=True, use_container_width=True)
+
+        with col_g2:
+            fig_liv = px.pie(df_livre_peso, values='Valor', names='Componente', title=f"Proposta E-Lumia ({melhor_com_mes})", hole=0.4, color_discrete_sequence=px.colors.sequential.Greens_r)
+            fig_liv.update_traces(textposition='inside', textinfo='percent+label', marker=dict(line=dict(color='#0F172A', width=2)))
+            fig_liv.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="white")
+            st.plotly_chart(fig_liv, use_container_width=True)
+            df_livre_peso_tela = pd.concat([df_livre_peso, pd.DataFrame([{"Componente": "SOMA DA FATURA (TOTAL)", "Valor": custo_total_acl_melhor_mes, "Peso (%)": 100.0}])], ignore_index=True)
+            st.dataframe(df_livre_peso_tela.style.format({"Valor": moeda_br, "Peso (%)": perc_br}), hide_index=True, use_container_width=True)
+
+    with tab_projecao:
+        st.markdown("### Projeção Financeira e Estudo de Economia")
+        linhas_proj_mensal = []
+        custo_atual_acumulado_total = 0
+        custo_livre_acumulado_total = 0
+
+        for ano_idx in range(anos_reais):
+            ano_civil_estudo = ano_corrente_calendario + ano_idx
+            fator_distribuidora = (1 + 0.08) ** ano_idx
+            
+            if ambiente_atual == "Mercado Cativo":
+                custo_atual_projetado_ano = (fatura_mensal_atual * 12) * fator_distribuidora
+            else:
+                fator_energia_livre = (1 + 0.06) ** ano_idx
+                p_atual_livre = preco_energia_atual_livre * fator_energia_livre
+                _, _, fat_energia_ano_concorrente = decompor_item(consumo_total_ano_mwh * p_atual_livre)
+                custo_atual_projetado_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_concorrente
+                
+            preco_csv_do_ano = dados_precos[melhor_com_mes][ano_idx]
+            _, _, fatura_energia_ano_elumia = decompor_item(consumo_total_ano_mwh * preco_csv_do_ano)
+            
+            fatura_resid_ano = (fatura_residual_concessionaria_acl * 12) * fator_distribuidora
+            fator_gestao = (1 + 0.06) ** ano_idx
+            fee_ano = (total_gestao_elumia_mes * 12) * fator_gestao
+            custo_proposto_ano = fatura_resid_ano + fatura_energia_ano_elumia + fee_ano
+            
+            custo_atual_acumulado_total += custo_atual_projetado_ano
+            custo_livre_acumulado_total += custo_proposto_ano
+            
+            pago_mensal_atual = custo_atual_projetado_ano / 12
+            pago_mensal_proposto = custo_proposto_ano / 12
+            economia_reais_mes = pago_mensal_atual - pago_mensal_proposto
+            economia_perc_mes = (economia_reais_mes / pago_mensal_atual) * 100
+            
+            linhas_proj_mensal.append({
+                "Ano": str(ano_civil_estudo),
+                "Média Mensal Base (R$/mês)": pago_mensal_atual,
+                "Média Mensal E-Lumia (R$/mês)": pago_mensal_proposto,
+                "Economia Média Mensal (R$/mês)": economia_reais_mes,
+                "Economia (%)": economia_perc_mes
+            })
+
+        df_estudo_integral_mensal = pd.DataFrame(linhas_proj_mensal)
+        
+        fig_bar = px.bar(
+            df_estudo_integral_mensal, x='Ano', y=['Média Mensal Base (R$/mês)', 'Média Mensal E-Lumia (R$/mês)'], barmode='group',
+            title="Evolução do Custo: Fatura Atual vs. Proposta", labels={'value': 'Custo Mensal Estimado (R$)', 'variable': 'Cenário'},
+            color_discrete_map={'Média Mensal Base (R$/mês)': '#ef4444', 'Média Mensal E-Lumia (R$/mês)': '#22c55e'}
+        )
+        fig_bar.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="white", legend_title_text='')
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+        st.dataframe(df_estudo_integral_mensal.style.format({
+            "Média Mensal Base (R$/mês)": moeda_br, "Média Mensal E-Lumia (R$/mês)": moeda_br, 
+            "Economia Média Mensal (R$/mês)": moeda_br, "Economia (%)": perc_br
+        }), use_container_width=True, hide_index=True)
+
+    with tab_concorrencia:
+        st.markdown("### Inteligência de Mercado: Matriz de Fornecedores")
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            st.caption("Matriz Base de Preços (R$/MWh)")
+            df_matriz_global_tela = pd.DataFrame(linhas_matriz_global)
+            st.dataframe(df_matriz_global_tela.style.format({
+                "2026 (R$/MWh)": moeda_br, "2027 (R$/MWh)": moeda_br, "2028 (R$/MWh)": moeda_br, "2029 (R$/MWh)": moeda_br, "2030 (R$/MWh)": moeda_br
+            }), use_container_width=True, hide_index=True)
+        with col_c2:
+            st.caption("Ranking de Viabilidade por Comercializadora")
+            df_fornecedores_tela = pd.DataFrame(dados_comparativo_fornecedores).sort_values("Economia Total Contrato (R$)", ascending=False)
+            st.dataframe(df_fornecedores_tela[['Comercializadora', 'Economia Média Mês (R$)', 'Economia Média Ano (R$)', 'Economia Total Contrato (R$)']].style.format({
+                "Economia Média Mês (R$)": moeda_br, "Economia Média Ano (R$)": moeda_br, "Economia Total Contrato (R$)": moeda_br
+            }), use_container_width=True, hide_index=True)
+
+    with tab_bandeiras:
+        st.markdown(f"### 🚩 Blindagem contra Bandeiras Tarifárias (Garantia E-Lumia)")
+        BANDEIRAS = {"Bandeira Verde": 0.0, "Bandeira Amarela": 18.85, "Bandeira Vermelha 1": 44.63, "Bandeira Vermelha 2": 78.77}
+        linhas_bandeiras = []
+        for nome_bandeira, valor_mwh in BANDEIRAS.items():
+            _, _, acrescimo_bandeira_com_imposto = decompor_item((consumo_total_mes_kwh / 1000) * valor_mwh)
+            cativo_com_bandeira = fatura_mensal_cativa + acrescimo_bandeira_com_imposto
+            economia_bandeira_reais = cativo_com_bandeira - custo_total_acl_melhor_mes
+            economia_bandeira_perc = (economia_bandeira_reais / cativo_com_bandeira) * 100
+            linhas_bandeiras.append({
+                "Cenário Hídrico": nome_bandeira, "Custo Cativo Estimado (c/ Bandeira)": cativo_com_bandeira,
+                "Custo Mensal Proposta E-Lumia": custo_total_acl_melhor_mes, "Economia Mensal Gerada (R$)": economia_bandeira_reais, "Economia (%)": economia_bandeira_perc
+            })
+        df_bandeiras = pd.DataFrame(linhas_bandeiras)
+        st.dataframe(df_bandeiras.style.format({
+            "Custo Cativo Estimado (c/ Bandeira)": moeda_br, "Custo Mensal Proposta E-Lumia": moeda_br,
+            "Economia Mensal Gerada (R$)": moeda_br, "Economia (%)": perc_br
+        }), use_container_width=True, hide_index=True)
+
+    st.markdown("<br/>", unsafe_allow_html=True)
+    k_final1, k_final2, k_final3 = st.columns(3)
+    k_final1.metric(f"Gasto Total Acumulado Estimado ({ambiente_atual})", moeda_br(custo_atual_acumulado_total))
+    k_final2.metric(f"Gasto Total Acumulado Otimizado ({melhor_com_mes})", moeda_br(custo_livre_acumulado_total))
+    k_final3.metric("Patrimônio Total Recuperado", moeda_br(custo_atual_acumulado_total - custo_livre_acumulado_total), delta="Economia Gerada para o Cliente")
+
+    # --- MOTOR DO PDF PAISAGEM ---
+    def draw_pdf_pie(df_peso, title_text):
+        d = Drawing(300, 160)
+        pc = Pie()
+        pc.x = 60
+        pc.y = 20
+        pc.width = 120
+        pc.height = 120
+        pc.data = df_peso['Valor'].tolist()
+        rotulos = []
+        for i, row in df_peso.iterrows():
+            rotulos.append(f"{row['Componente']} ({perc_br(row['Peso (%)'])})")
+        pc.labels = rotulos
+        pc.sideLabels = 1
+        pc.slices.strokeWidth = 0.5
+        if "Base" in title_text or "Atual" in title_text:
+            pc.slices[0].fillColor = colors.HexColor("#ef4444") 
+            pc.slices[3].fillColor = colors.HexColor("#f87171") 
         else:
-            st.error(f"Falha de credenciais com o servidor do Drive: {status_upload}")
+            pc.slices[3].fillColor = colors.HexColor("#22c55e") 
+            pc.slices[4].fillColor = colors.HexColor("#3b82f6") 
+        title = String(120, 150, title_text)
+        title.fontName = 'Helvetica-Bold'
+        title.fontSize = 11
+        title.textAnchor = 'middle' 
+        d.add(title)
+        d.add(pc)
+        return d
+
+    def build_pdf():
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+        styles = getSampleStyleSheet()
+        title_style_left = ParagraphStyle('TitleStyleLeft', fontName='Helvetica-Bold', fontSize=16, textColor=colors.HexColor("#1A365D"), alignment=2)
+        h2_style = ParagraphStyle('H2Style', parent=styles['Heading2'], fontSize=11, textColor=colors.HexColor("#1E3A8A"), spaceBefore=12, spaceAfter=6, fontName='Helvetica-Bold')
+        card_style = ParagraphStyle('Card', fontSize=12, textColor=colors.whitesmoke, alignment=1)
+        
+        story = []
+        if os.path.exists("logo.png"):
+            logo_element = Image("logo.png", width=120, height=40)
+        else:
+            logo_style = ParagraphStyle('LogoStyle', fontName='Helvetica-Bold', fontSize=18, textColor=colors.HexColor("#3B82F6"))
+            logo_element = Paragraph("⚡ E-LUMIA", logo_style)
+            
+        title_p = Paragraph("PROPOSTA EXECUTIVA - MERCADO LIVRE DE ENERGIA", title_style_left)
+        header_table = Table([[logo_element, title_p]], colWidths=[200, 532])
+        header_table.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (1,0), (1,0), 'RIGHT')]))
+        story.append(header_table)
+        story.append(Spacer(1, 15))
+        
+        if pld_dados:
+            story.append(Paragraph(f"Termômetro de Exposição CCEE | PLD Médio - {pld_dados['mes_ref']}", h2_style))
+            pld_headers = [formatar_pld("Sudeste", 0), formatar_pld("Sul", 0), formatar_pld("Nordeste", 0), formatar_pld("Norte", 0)]
+            pld_values = [moeda_br(pld_dados['Sudeste']), moeda_br(pld_dados['Sul']), moeda_br(pld_dados['Nordeste']), moeda_br(pld_dados['Norte'])]
+            t_pld = Table([pld_headers, pld_values], colWidths=[183, 183, 183, 183])
+            t_pld.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#1E293B")), ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor("#94A3B8")),
+                ('TEXTCOLOR', (0,1), (-1,1), colors.whitesmoke), ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+                ('FONTNAME', (0,1), (-1,1), 'Helvetica-Bold'), ('FONTSIZE', (0,1), (-1,1), 12),
+                ('GRID', (0,0), (-1,-1), 1, colors.HexColor("#334155"))
+            ]))
+            story.append(t_pld)
+            story.append(Spacer(1, 15))
+
+        if nome_cliente or cnpj_input:
+            card_text = f"<font color='#3B82F6'><b>DIAGNÓSTICO COMERCIAL EXECUTIVO</b></font><br/><br/>Parceiro mais competitivo selecionado para <b>{nome_cliente}</b> no Submercado <b>{submercado_selecionado}</b> para o produto <b>{tipo_energia}</b>:<br/><b>{melhor_com_mes}</b> com economia de <b>{perc_br(economia_mes_1_perc)}</b> em 2026.<br/><br/><font size='10' color='#94A3B8'>Consultor Responsável: {vendedor_responsavel}</font>"
+            t_card = Table([[Paragraph(card_text, card_style)]], colWidths=[732])
+            t_card.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#1E293B")), ('ALIGN', (0,0), (-1,-1), 'CENTER'), ('LINEBEFORE', (0,0), (0,-1), 6, colors.HexColor("#3B82F6"))]))
+            story.append(t_card)
+            story.append(Spacer(1, 15))
+
+        story.append(Paragraph("1. Matriz Global de Ofertas Mapeadas (Anual)", h2_style))
+        pdf_matriz_data = [["Comercializadora", "2026", "2027", "2028", "2029", "2030"]]
+        for row in linhas_matriz_global:
+            pdf_matriz_data.append([row["Comercializadora"], moeda_br(row['2026 (R$/MWh)']), moeda_br(row['2027 (R$/MWh)']), moeda_br(row['2028 (R$/MWh)']), moeda_br(row['2029 (R$/MWh)']), moeda_br(row['2030 (R$/MWh)'])])
+        t_matriz = Table(pdf_matriz_data, colWidths=[182, 110, 110, 110, 110, 110])
+        t_matriz.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke), ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey), ('FONTSIZE', (0,0), (-1,-1), 9)]))
+        story.append(t_matriz)
+        story.append(Spacer(1, 10))
+
+        story.append(Paragraph(f"2. Composição de Custos Mensais ({nome_cenario_base} vs Proposta)", h2_style))
+        grafico_cativo = draw_pdf_pie(df_atual_peso, "Cenário Base")
+        grafico_livre = draw_pdf_pie(df_livre_peso, f"Proposta E-Lumia")
+        tabela_graficos = Table([[grafico_cativo, grafico_livre]], colWidths=[366, 366])
+        story.append(tabela_graficos)
+        story.append(Spacer(1, 10))
+
+        pdf_fatura_data = [["Estrutura de Custo", "Cenário Base (Atual)", "Peso (%)", f"Proposta E-Lumia", "Peso (%)"]]
+        linhas_custo = ["Demanda", "Demanda (TUSD c/ Desc)", "TUSD Ponta", "TUSD F. Ponta", "TE Ponta", "TE F. Ponta", "Energia Atual Concorrente", "Energia Proposta ACL", "Gestão E-Lumia"]
+        def acha_valor(df, comp):
+            linha = df[df["Componente"] == comp]
+            if not linha.empty: return moeda_br(linha.iloc[0]['Valor']), perc_br(linha.iloc[0]['Peso (%)'])
+            return "-", "-"
+        for c in linhas_custo:
+            val_cat, peso_cat = acha_valor(df_atual_peso, c)
+            val_liv, peso_liv = acha_valor(df_livre_peso, c)
+            if val_cat != "-" or val_liv != "-": pdf_fatura_data.append([c, val_cat, peso_cat, val_liv, peso_liv])
+        pdf_fatura_data.append(["SOMA DA FATURA (TOTAL)", moeda_br(fatura_mensal_atual), "100,0%", moeda_br(custo_total_acl_melhor_mes), "100,0%"])
+        t_fatura = Table(pdf_fatura_data, colWidths=[232, 150, 100, 150, 100])
+        t_fatura.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke), ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey), ('FONTSIZE', (0,0), (-1,-1), 9), ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#F8FAFC")), ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold')]))
+        story.append(t_fatura)
+        story.append(Spacer(1, 15))
+
+        story.append(Paragraph("3. Estudo Cronológico: Média Mensal Paga por Ano", h2_style))
+        proj_data = [["Ano", "Média Mensal Base", "Média Mensal Proposta", "Economia Mês (R$)", "Economia (%)"]]
+        for row in linhas_proj_mensal:
+            proj_data.append([row["Ano"], moeda_br(row['Média Mensal Base (R$/mês)']), moeda_br(row['Média Mensal E-Lumia (R$/mês)']), moeda_br(row['Economia Média Mensal (R$/mês)']), perc_br(row['Economia (%)'])])
+        t_proj = Table(proj_data, colWidths=[132, 150, 150, 150, 150])
+        t_proj.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke), ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey), ('FONTSIZE', (0,0), (-1,-1), 9), ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#16A34A")), ('TEXTCOLOR', (0,-1), (-1,-1), colors.whitesmoke), ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold')]))
+        story.append(t_proj)
+        story.append(Spacer(1, 15))
+
+        story.append(Paragraph("4. Blindagem contra Bandeiras Tarifárias", h2_style))
+        pdf_bandeiras_data = [["Cenário Hídrico", "Custo Estimado (c/ Band.)", f"Proposta E-Lumia", "Economia (R$)", "Economia (%)"]]
+        for row in linhas_bandeiras:
+            pdf_bandeiras_data.append([row["Cenário Hídrico"], moeda_br(row['Custo Cativo Estimado (c/ Bandeira)']), moeda_br(row['Custo Mensal Proposta E-Lumia']), moeda_br(row['Economia Mensal Gerada (R$)']), perc_br(row['Economia (%)'])])
+        t_band = Table(pdf_bandeiras_data, colWidths=[132, 150, 150, 150, 150])
+        t_band.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke), ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey), ('FONTSIZE', (0,0), (-1,-1), 9), ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#16A34A")), ('TEXTCOLOR', (0,-1), (-1,-1), colors.whitesmoke), ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold')]))
+        story.append(t_band)
+        story.append(Spacer(1, 15))
+
+        story.append(Paragraph("5. Comparativo de Viabilidade por Comercializadora", h2_style))
+        pdf_com_forn_data = [["Comercializadora", "Média Econ. Mês", "Média Econ. Ano", "Total Contrato"]]
+        for r_com in dados_comparativo_fornecedores:
+            pdf_com_forn_data.append([r_com["Comercializadora"], moeda_br(r_com['Economia Média Mês (R$)']), moeda_br(r_com['Economia Média Ano (R$)']), moeda_br(r_com['Economia Total Contrato (R$)'])])
+        t_forn = Table(pdf_com_forn_data, colWidths=[222, 170, 170, 170])
+        t_forn.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A365D")), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke), ('ALIGN', (1,0), (-1,-1), 'RIGHT'), ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey), ('FONTSIZE', (0,0), (-1,-1), 9)]))
+        story.append(t_forn)
+        story.append(Spacer(1, 20))
+
+        kpi_values = [moeda_br(custo_atual_acumulado_total), moeda_br(custo_livre_acumulado_total), moeda_br(custo_atual_acumulado_total - custo_livre_acumulado_total)]
+        t_kpi = Table([[f"Gasto Acumulado ({ambiente_atual})", f"Gasto Acumulado E-Lumia", "Patrimônio Total Recuperado"], kpi_values], colWidths=[244, 244, 244])
+        t_kpi.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#0F172A")), ('BACKGROUND', (0,1), (-1,1), colors.HexColor("#1E293B")), ('TEXTCOLOR', (0,0), (-1,-1), colors.whitesmoke), ('ALIGN', (0,0), (-1,-1), 'CENTER'), ('FONTNAME', (0,1), (-1,1), 'Helvetica-Bold'), ('FONTSIZE', (0,1), (-1,1), 14), ('GRID', (0,0), (-1,-1), 2, colors.white)]))
+        story.append(t_kpi)
+        return buffer.getvalue()
+
+    # --- NOVO: CENTRAL DE FECHAMENTO COM CONTROLE DE ARQUIVAMENTO MANUAL ---
+    st.markdown("---")
+    st.subheader("🖨️ Central de Apresentação e Fechamento de Propostas")
+    st.caption("Utilize os botões abaixo para interagir de forma controlada com o repositório oficial da empresa.")
+
+    col_pdf_down, col_drive_up = st.columns(2)
+
+    with col_pdf_down:
+        pdf_bytes = build_pdf()
+        nome_cliente_limpo = re.sub(r'[\\/*?:"<>|.]', '', nome_cliente).replace(' ', '_') if nome_cliente else "Cliente"
+        nome_arquivo_manual = f"Estudo_Viabilidade_{nome_cliente_limpo}_{vendedor_responsavel}.pdf"
+        
+        st.download_button(
+            label="📄 Baixar Proposta Executiva Oficial (PDF Local)",
+            data=pdf_bytes,
+            file_name=nome_arquivo_manual,
+            mime="application/pdf",
+            use_container_width=True
+        )
+
+    with col_drive_up:
+        if st.button("💾 Arquivar Versão Oficial no Google Drive", use_container_width=True, type="secondary"):
+            timestamp_oficial = datetime.now().strftime("%d-%m-%Y_%Hh%M")
+            nome_arquivamento_drive = f"Proposta_{nome_cliente_limpo}_{vendedor_responsavel}_{timestamp_oficial}.pdf"
+            
+            with st.spinner("Conectando ao Google Drive da E-Lumia..."):
+                status_upload = upload_automatico_drive(pdf_bytes, nome_arquivamento_drive)
+                
+            if status_upload is True:
+                st.success(f"✅ Sucesso! Versão cravada e arquivada como: '{nome_arquivamento_drive}'")
+            else:
+                st.error(f"Falha de credenciais com o servidor do Drive: {status_upload}")
