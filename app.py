@@ -316,7 +316,6 @@ if not df_precos_globais.empty:
             dados_precos_auto[com] = precos_limpos
 
 if not comercializadoras:
-    st.sidebar.warning(f"⚠️ Valores não encontrados no arquivo CSV. Usando padrão.")
     comercializadoras = ["Casa dos Ventos Padrão", "Matrix Padrão"]
     dados_precos_auto = {
         "Casa dos Ventos Padrão": [180.0, 186.0, 192.5, 199.2, 206.1],
@@ -419,18 +418,23 @@ if botao_calcular:
         soma_economia_contrato = 0
         for ano_idx in range(anos_reais):
             fator_distribuidora = (1 + 0.08) ** ano_idx
-            fator_energia_livre = (1 + 0.06) ** ano_idx
             
+            # --- CORREÇÃO MATEMÁTICA: O preço da energia no CSV NÃO sofre inflação extra ---
             if ambiente_atual == "Mercado Cativo":
                 custo_atual_projetado_ano = (fatura_mensal_atual * 12) * fator_distribuidora
             else:
-                p_inflacionado_concorrente = preco_energia_atual_livre * fator_energia_livre
-                _, _, fat_energia_ano_concorrente = decompor_item(consumo_total_ano_mwh * p_inflacionado_concorrente)
+                p_atual_livre = preco_energia_atual_livre # Mantém flat (ou ajusta conforme sua regra de Livre x Livre)
+                _, _, fat_energia_ano_concorrente = decompor_item(consumo_total_ano_mwh * p_atual_livre)
                 custo_atual_projetado_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_concorrente
             
-            p_inflacionado_elumia = dados_precos[com][ano_idx] * fator_energia_livre
-            _, _, fat_energia_ano_elumia = decompor_item(consumo_total_ano_mwh * p_inflacionado_elumia)
-            custo_proposto_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_elumia + ((total_gestao_elumia_mes * 12) * fator_energia_livre)
+            # Preço da E-lumia segue cravado o que está no CSV do ano correspondente
+            preco_csv_do_ano = dados_precos[com][ano_idx]
+            _, _, fat_energia_ano_elumia = decompor_item(consumo_total_ano_mwh * preco_csv_do_ano)
+            
+            # O fee de gestão da E-lumia tem reajuste inflacionário padrão de 6% ao ano
+            fator_gestao = (1 + 0.06) ** ano_idx
+            
+            custo_proposto_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_elumia + ((total_gestao_elumia_mes * 12) * fator_gestao)
             
             soma_economia_contrato += (custo_atual_projetado_ano - custo_proposto_ano)
             
@@ -469,7 +473,6 @@ if botao_calcular:
     </div>
     """, unsafe_allow_html=True)
 
-    # --- SISTEMA DE ABAS (TABS) PARA UX/UI ---
     tab_resumo, tab_projecao, tab_concorrencia, tab_bandeiras = st.tabs([
         "📊 1. Resumo Executivo", 
         "📈 2. Projeção Financeira", 
@@ -492,7 +495,7 @@ if botao_calcular:
 
         col_g1, col_g2 = st.columns(2)
         with col_g1:
-            fig_cat = px.pie(df_atual_peso, values='Valor', names='Componente', title=nome_cenario_base, hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
+            fig_cat = px.pie(df_atual_peso, values='Valor', names='Componente', title="Cenário Base (Atual)", hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
             fig_cat.update_traces(textposition='inside', textinfo='percent+label', marker=dict(line=dict(color='#0F172A', width=2)))
             fig_cat.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="white")
             st.plotly_chart(fig_cat, use_container_width=True)
@@ -518,20 +521,20 @@ if botao_calcular:
         for ano_idx in range(anos_reais):
             ano_civil_estudo = ano_corrente_calendario + ano_idx
             fator_distribuidora = (1 + 0.08) ** ano_idx
-            fator_energia_livre = (1 + 0.06) ** ano_idx
+            fator_gestao = (1 + 0.06) ** ano_idx
             
             if ambiente_atual == "Mercado Cativo":
                 custo_atual_projetado_ano = (fatura_mensal_atual * 12) * fator_distribuidora
             else:
-                p_inflacionado_concorrente = preco_energia_atual_livre * fator_energia_livre
-                _, _, fat_energia_ano_concorrente = decompor_item(consumo_total_ano_mwh * p_inflacionado_concorrente)
+                p_atual_livre = preco_energia_atual_livre
+                _, _, fat_energia_ano_concorrente = decompor_item(consumo_total_ano_mwh * p_atual_livre)
                 custo_atual_projetado_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_concorrente
                 
-            preco_com_inflacao_elumia = dados_precos[melhor_com_mes][ano_idx] * fator_energia_livre
-            _, _, fatura_energia_ano_elumia = decompor_item(consumo_total_ano_mwh * preco_com_inflacao_elumia)
+            preco_csv_do_ano = dados_precos[melhor_com_mes][ano_idx]
+            _, _, fatura_energia_ano_elumia = decompor_item(consumo_total_ano_mwh * preco_csv_do_ano)
             
             fatura_resid_ano = (fatura_residual_concessionaria_acl * 12) * fator_distribuidora
-            fee_ano = (total_gestao_elumia_mes * 12) * fator_energia_livre
+            fee_ano = (total_gestao_elumia_mes * 12) * fator_gestao
             custo_proposto_ano = fatura_resid_ano + fatura_energia_ano_elumia + fee_ano
             
             custo_atual_acumulado_total += custo_atual_projetado_ano
@@ -552,7 +555,6 @@ if botao_calcular:
 
         df_estudo_integral_mensal = pd.DataFrame(linhas_proj_mensal)
         
-        # --- GRÁFICO DE BARRAS EVOLUTIVO ---
         fig_bar = px.bar(
             df_estudo_integral_mensal, 
             x='Ano', 
@@ -653,7 +655,7 @@ if botao_calcular:
         pc.sideLabels = 1
         pc.slices.strokeWidth = 0.5
         
-        if "Cativo" in title_text or "Atual" in title_text:
+        if "Base" in title_text or "Atual" in title_text:
             pc.slices[0].fillColor = colors.HexColor("#ef4444") 
             pc.slices[3].fillColor = colors.HexColor("#f87171") 
         else:
@@ -740,8 +742,8 @@ if botao_calcular:
         story.append(t_matriz)
         story.append(Spacer(1, 10))
 
-        story.append(Paragraph(f"2. Composição de Custos Mensais ({nome_cenario_base} vs Proposta)", h2_style))
-        grafico_cativo = draw_pdf_pie(df_atual_peso, nome_cenario_base)
+        story.append(Paragraph(f"2. Composição de Custos Mensais (Cenário Base vs Proposta)", h2_style))
+        grafico_cativo = draw_pdf_pie(df_atual_peso, "Cenário Base")
         grafico_livre = draw_pdf_pie(df_livre_peso, f"Proposta E-Lumia")
         tabela_graficos = Table([[grafico_cativo, grafico_livre]], colWidths=[366, 366])
         story.append(tabela_graficos)
@@ -773,7 +775,7 @@ if botao_calcular:
         story.append(Spacer(1, 15))
 
         story.append(Paragraph("3. Estudo Cronológico: Média Mensal Paga por Ano", h2_style))
-        proj_data = [["Ano", "Média Mensal Base Atual", "Média Mensal Proposta", "Economia Mês (R$)", "Economia (%)"]]
+        proj_data = [["Ano", "Média Mensal Base", "Média Mensal Proposta", "Economia Mês (R$)", "Economia (%)"]]
         for row in linhas_proj_mensal:
             proj_data.append([
                 row["Ano"], moeda_br(row['Média Mensal Base (R$/mês)']),
@@ -790,7 +792,7 @@ if botao_calcular:
         story.append(Spacer(1, 15))
 
         story.append(Paragraph("4. Blindagem contra Bandeiras Tarifárias", h2_style))
-        pdf_bandeiras_data = [["Cenário Hídrico", "Cativo Projetado", f"Proposta E-Lumia", "Economia (R$)", "Economia (%)"]]
+        pdf_bandeiras_data = [["Cenário Hídrico", "Custo Estimado (c/ Band.)", f"Proposta E-Lumia", "Economia (R$)", "Economia (%)"]]
         for row in linhas_bandeiras:
             pdf_bandeiras_data.append([
                 row["Cenário Hídrico"], moeda_br(row['Custo Cativo Estimado (c/ Bandeira)']), moeda_br(row['Custo Mensal Proposta E-Lumia']),
@@ -821,7 +823,7 @@ if botao_calcular:
         story.append(t_forn)
         story.append(Spacer(1, 20))
 
-        kpi_headers = [f"Gasto Acumulado ({ambiente_atual})", f"Gasto Acumulado E-Lumia", "Patrimônio Total Recuperado"]
+        kpi_headers = [f"Gasto Acumulado Estimado ({ambiente_atual})", f"Gasto Acumulado E-Lumia", "Patrimônio Total Recuperado"]
         kpi_values = [moeda_br(custo_atual_acumulado_total), moeda_br(custo_livre_acumulado_total), moeda_br(custo_atual_acumulado_total - custo_livre_acumulado_total)]
         t_kpi = Table([kpi_headers, kpi_values], colWidths=[244, 244, 244])
         t_kpi.setStyle(TableStyle([
