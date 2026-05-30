@@ -180,12 +180,17 @@ def fetch_fatura_data(concessionaria, subgrupo, modalidade):
 
 def upload_automatico_drive(data_bytes, name_file):
     try:
+        if "gdrive_credentials" not in st.secrets or "gdrive_folder_id" not in st.secrets:
+            return "Faltam as chaves 'gdrive_credentials' ou 'gdrive_folder_id' na configuração do Streamlit Secrets."
+            
         info_keys = st.secrets["gdrive_credentials"]
         folder_target_id = st.secrets["gdrive_folder_id"]
+        
         credentials_account = service_account.Credentials.from_service_account_info(info_keys)
         service_drive = build('drive', 'v3', credentials=credentials_account)
         meta_data = {'name': name_file, 'parents': [folder_target_id]}
         stream_media = MediaIoBaseUpload(BytesIO(data_bytes), mimetype='application/pdf', resumable=True)
+        
         service_drive.files().create(body=meta_data, media_body=stream_media, fields='id', supportsAllDrives=True).execute()
         return True
     except Exception as error_log:
@@ -198,7 +203,6 @@ st.sidebar.markdown("---")
 
 st.sidebar.header("🎯 Qualificação do Cliente")
 
-# SELETOR DE AMBIENTE (CATIVO VS LIVRE) COM TOOLTIP
 ambiente_atual = st.sidebar.radio("Ambiente Atual do Cliente", ["Mercado Cativo", "Mercado Livre"], 
                                   help="Selecione Cativo para comparar contra as tarifas da concessionária. Selecione Livre para comparar nossa proposta com o contrato atual do cliente.")
 
@@ -209,7 +213,7 @@ cnpj_input = st.sidebar.text_input("CNPJ (Aperte Enter)", placeholder="00.000.00
 cnpj_limpo = re.sub(r'[^0-9]', '', cnpj_input)
 
 if len(cnpj_limpo) == 14:
-    with st.sidebar.spinner("Buscando dados da Receita..."):
+    with st.sidebar.spinner("A buscar dados da Receita..."):
         try:
             response = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj_limpo}", timeout=8)
             if response.status_code == 200:
@@ -232,9 +236,8 @@ lista_submercados = ["Sudeste", "Sul", "Nordeste", "Norte"]
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🌍 Região de Fornecimento")
-submercado_selecionado = st.sidebar.selectbox("Submercado (Auto-Detectado)", lista_submercados, index=lista_submercados.index(submercado_inferido))
+submercado_selecionado = st.sidebar.selectbox("Submercado (Auto-Deteção)", lista_submercados, index=lista_submercados.index(submercado_inferido))
 
-# --- MÁQUINA DO TEMPO & INDEXAÇÃO ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Horizonte do Contrato")
 ano_inicio_contrato = st.sidebar.number_input("Ano de Início do Contrato", min_value=2024, max_value=2035, value=datetime.now().year, step=1, help="Ano civil em que o cliente iniciará o consumo.")
@@ -276,8 +279,8 @@ consumo_p = consumo_kwh_p / 1000
 consumo_total_mes_kwh = consumo_kwh_fp + consumo_kwh_p
 consumo_total_ano_mwh = (consumo_total_mes_kwh / 1000) * 12
 
-# --- INTEGRAÇÃO DO BANCO DE PREÇOS COM MAPEAMENTO EXATO DE ANO ---
-data_atualizacao_csv = "Data Indisponível"
+# --- INTEGRAÇÃO DO BANCO DE PREÇOS ---
+data_atualizacao_csv = "Dado Indisponível"
 if os.path.exists(NOME_ARQUIVO_PRECOS):
     timestamp_modificacao = os.path.getmtime(NOME_ARQUIVO_PRECOS)
     data_atualizacao_csv = datetime.fromtimestamp(timestamp_modificacao).strftime('%d/%m/%Y às %H:%M')
@@ -309,7 +312,6 @@ if not df_precos_globais.empty:
             df_com = df_filtrado[df_filtrado['Comercializadora'] == com]
             precos_limpos = []
             
-            # Mapeia cirurgicamente o preço usando a coluna "Ano" exata solicitada pelo painel
             for i in range(5):
                 ano_alvo = ano_inicio_contrato + i
                 row_ano = df_com[df_com['Ano'] == ano_alvo]
@@ -323,7 +325,6 @@ if not df_precos_globais.empty:
                     if pd.isna(valor_num): valor_num = 0.0
                     precos_limpos.append(float(valor_num))
                 else:
-                    # Se não houver curva cadastrada para aquele ano específico, repete o último valor lido
                     precos_limpos.append(precos_limpos[-1] if precos_limpos else 0.0)
                     
             dados_precos_auto[com] = precos_limpos
@@ -339,7 +340,7 @@ modo_manual = st.sidebar.toggle("🔓 Desbloquear Precificação Manual")
 dados_precos = {}
 
 if modo_manual:
-    st.sidebar.caption("Modo de exceção ativado. Você pode editar os valores propostos:")
+    st.sidebar.caption("Modo de exceção ativado. Pode editar os valores propostos:")
     for com in comercializadoras:
         with st.sidebar.expander(f"Editar - {com}", expanded=False):
             precos_anos = []
@@ -353,7 +354,7 @@ else:
 
 componentes = fetch_fatura_data(concessionaria, subgrupo, modalidade)
 
-# --- CONTROLE DE MEMÓRIA (SESSION STATE) ---
+# --- CONTROLO DE MEMÓRIA (SESSION STATE) ---
 if "mostrar_resultados" not in st.session_state:
     st.session_state.mostrar_resultados = False
 
@@ -366,7 +367,7 @@ if botao_calcular:
 # --- ÁREA PRINCIPAL DA PLATAFORMA ---
 pld_dados = buscar_pld_internet()
 if pld_dados:
-    st.markdown(f"**Termômetro de Exposição CCEE | PLD Médio - {pld_dados['mes_ref']}**")
+    st.markdown(f"**Termómetro de Exposição CCEE | PLD Médio - {pld_dados['mes_ref']}**")
     pld1, pld2, pld3, pld4 = st.columns(4)
     def formatar_pld(mercado_nome, valor_pld):
         if mercado_nome.upper() == submercado_selecionado.upper(): return f"📍 {mercado_nome}"
@@ -383,20 +384,6 @@ st.title(f"⚡ E-Lumia | Proposta: {nome_cenario_base} vs. E-Lumia")
 # A TELA SÓ É PROCESSADA SE A MEMÓRIA ESTIVER ATIVA
 if st.session_state.mostrar_resultados:
     
-    # 1. MATRIZ DE OFERTAS
-    st.subheader(f"🏢 Matriz Global de Ofertas Mapeadas para o Estudo ({tipo_energia})")
-    linhas_matriz_global = []
-    for com in comercializadoras:
-        row_data = {"Comercializadora": com}
-        for i in range(5):
-            ano_alvo = ano_inicio_contrato + i
-            row_data[f"{ano_alvo} (R$/MWh)"] = dados_precos[com][i]
-        linhas_matriz_global.append(row_data)
-
-    df_matriz_global_tela = pd.DataFrame(linhas_matriz_global)
-    format_dict_matriz = {f"{ano_inicio_contrato + i} (R$/MWh)": moeda_br for i in range(5)}
-    st.dataframe(df_matriz_global_tela.style.format(format_dict_matriz), use_container_width=True, hide_index=True)
-
     def decompor_item(valor_base):
         valor_com_imposto = valor_base / (1 - impostos_totais)
         imposto_calculado = valor_com_imposto * impostos_totais
@@ -436,22 +423,29 @@ if st.session_state.mostrar_resultados:
         })
 
     fatura_residual_concessionaria_acl = total_demanda_acl + total_tusd_p_cat + total_tusd_fp_cat
-    _, _, total_gestao_elumia_mes = decompor_item((consumo_total_mes_kwh / 1000) * fee_elumia_mwh)
+    
+    # --- CORREÇÃO: O FEE DE GESTÃO NÃO SOFRE ICMS/PIS/COFINS COMO A ENERGIA ---
+    total_gestao_elumia_mes = (consumo_total_mes_kwh / 1000) * fee_elumia_mwh
 
     anos_reais = int(tempo_contrato / 12)
     dados_comparativo_fornecedores = []
-    
-    # MOTOR FINANCEIRO COM REGRAS LIVRE X LIVRE EXATAS
+    ano_corrente_calendario = ano_inicio_contrato
+
+    linhas_matriz_global = []
     for com in comercializadoras:
+        row_data = {"Comercializadora": com}
+        for i in range(5):
+            ano_alvo = ano_inicio_contrato + i
+            row_data[f"{ano_alvo} (R$/MWh)"] = dados_precos[com][i]
+        linhas_matriz_global.append(row_data)
+
         soma_economia_contrato = 0
         for ano_idx in range(anos_reais):
-            
             if ambiente_atual == "Mercado Cativo":
                 fator_distribuidora = (1 + 0.08) ** ano_idx
                 fator_gestao = (1 + (ipca_medio / 100)) ** ano_idx
                 custo_atual_projetado_ano = (fatura_mensal_atual * 12) * fator_distribuidora
             else:
-                # Regra de Ouro Livre x Livre: NENHUM indexador para E-Lumia ou Concessionária, exceto o IPCA na energia do concorrente.
                 fator_distribuidora = 1.0 
                 fator_gestao = 1.0
                 fator_energia_concorrente = (1 + (ipca_medio / 100)) ** ano_idx
@@ -460,7 +454,6 @@ if st.session_state.mostrar_resultados:
                 _, _, fat_energia_ano_concorrente = decompor_item(consumo_total_ano_mwh * p_atual_livre)
                 custo_atual_projetado_ano = ((fatura_residual_concessionaria_acl * 12) * fator_distribuidora) + fat_energia_ano_concorrente
             
-            # E-LUMIA: Usa exatamente o preço mapeado no CSV pro ano, SEM somar nenhuma inflação extra.
             preco_csv_do_ano = dados_precos[com][ano_idx]
             _, _, fatura_energia_ano_elumia = decompor_item(consumo_total_ano_mwh * preco_csv_do_ano)
             
@@ -782,13 +775,23 @@ if st.session_state.mostrar_resultados:
         story.append(Spacer(1, 20))
 
         kpi_values = [moeda_br(custo_atual_acumulado_total), moeda_br(custo_livre_acumulado_total), moeda_br(custo_atual_acumulado_total - custo_livre_acumulado_total)]
-        t_kpi = Table([[f"Gasto Acumulado ({ambiente_atual})", f"Gasto Acumulado E-Lumia", "Patrimônio Total Recuperado"], kpi_values], colWidths=[244, 244, 244])
+        t_kpi = Table([[f"Gasto Acumulado Estimado ({ambiente_atual})", f"Gasto Acumulado E-Lumia", "Patrimônio Total Recuperado"], kpi_values], colWidths=[244, 244, 244])
         t_kpi.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#0F172A")), ('BACKGROUND', (0,1), (-1,1), colors.HexColor("#1E293B")), ('TEXTCOLOR', (0,0), (-1,-1), colors.whitesmoke), ('ALIGN', (0,0), (-1,-1), 'CENTER'), ('FONTNAME', (0,1), (-1,1), 'Helvetica-Bold'), ('FONTSIZE', (0,1), (-1,1), 14), ('GRID', (0,0), (-1,-1), 2, colors.white)]))
         story.append(t_kpi)
         
         doc.build(story)
         buffer.seek(0)
         return buffer.getvalue()
+
+    if "status_drive" not in st.session_state:
+        st.session_state.status_drive = None
+
+    def disparar_upload_drive(pdf_bytes_file, nome_arquivo_drive):
+        resultado = upload_automatico_drive(pdf_bytes_file, nome_arquivo_drive)
+        if resultado is True:
+            st.session_state.status_drive = {"sucesso": True, "msg": f"✅ Sucesso! Arquivo guardado no Google Drive de {vendedor_responsavel}!"}
+        else:
+            st.session_state.status_drive = {"sucesso": False, "msg": f"⚠️ Erro de Integração com Google Drive: {resultado}"}
 
     try:
         pdf_bytes = build_pdf()
@@ -813,17 +816,22 @@ if st.session_state.mostrar_resultados:
             
         with col_d2:
             st.markdown("<br/>", unsafe_allow_html=True)
-            if st.button("💾 Arquivar Versão no Google Drive", use_container_width=True, type="secondary"):
-                timestamp_oficial = datetime.now().strftime("%d-%m-%Y_%Hh%M")
-                nome_arquivamento_drive = f"Proposta_{nome_cliente_limpo}_{vendedor_responsavel}_{timestamp_oficial}.pdf"
-                
-                with st.spinner("Conectando ao Google Drive..."):
-                    status_upload = upload_automatico_drive(pdf_bytes, nome_arquivamento_drive)
-                    
-                if status_upload is True:
-                    st.success(f"✅ Arquivado no Drive de {vendedor_responsavel}!")
+            timestamp_oficial = datetime.now().strftime("%d-%m-%Y_%Hh%M")
+            nome_arquivamento_drive = f"Proposta_{nome_cliente_limpo}_{vendedor_responsavel}_{timestamp_oficial}.pdf"
+            
+            st.button(
+                "💾 Arquivar Versão no Google Drive", 
+                on_click=disparar_upload_drive, 
+                args=(pdf_bytes, nome_arquivamento_drive), 
+                use_container_width=True, 
+                type="secondary"
+            )
+            
+            if st.session_state.status_drive:
+                if st.session_state.status_drive["sucesso"]:
+                    st.success(st.session_state.status_drive["msg"])
                 else:
-                    st.error(f"Erro no backup do Drive: {status_upload}")
+                    st.error(st.session_state.status_drive["msg"])
                     
     except Exception as erro_pdf:
         st.error(f"⚠️ Erro ao gerar o PDF. Verifique se os dados estão preenchidos corretamente. (Log técnico: {erro_pdf})")
