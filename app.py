@@ -150,14 +150,16 @@ def fetch_fatura_data(concessionaria, subgrupo, modalidade):
             col_tusd = next((c for c in df.columns if 'tusd' in c.lower() and ('vlr' in c.lower() or 'valor' in c.lower())), None)
 
             if all([col_sigla, col_sub, col_mod]):
-                mask = (df[col_sigla] == concessionaria) & (df[col_sub] == subgrupo) & (df[col_mod] == modalidade)
+                mask = (df[col_sigla].astype(str).str.strip().str.upper() == str(concessionaria).strip().str.upper()) & \
+                       (df[col_sub].astype(str).str.strip().str.upper() == str(subgrupo).strip().str.upper()) & \
+                       (df[col_mod].astype(str).str.strip().str.upper() == str(modalidade).strip().str.upper())
                 df_filtered = df[mask].copy()
 
                 if not df_filtered.empty:
                     if col_te:
-                        df_filtered[col_te] = pd.to_numeric(df_filtered[col_te].astype(str).str.replace(',', '.'), errors='coerce').fillna(0) * (1000 if df_filtered[col_te].max() < 10 else 1)
+                        df_filtered[col_te] = pd.to_numeric(df_filtered[col_te].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
                     if col_tusd:
-                        df_filtered[col_tusd] = pd.to_numeric(df_filtered[col_tusd].astype(str).str.replace(',', '.'), errors='coerce').fillna(0) * (1000 if df_filtered[col_tusd].max() < 10 else 1)
+                        df_filtered[col_tusd] = pd.to_numeric(df_filtered[col_tusd].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
                     
                     if col_posto:
                         df_filtered['posto_clean'] = df_filtered[col_posto].astype(str).str.lower().str.strip()
@@ -213,7 +215,7 @@ cnpj_input = st.sidebar.text_input("CNPJ (Aperte Enter)", placeholder="00.000.00
 cnpj_limpo = re.sub(r'[^0-9]', '', cnpj_input)
 
 if len(cnpj_limpo) == 14:
-    with st.sidebar.spinner("A buscar dados da Receita..."):
+    with st.sidebar.spinner("Buscando dados da Receita..."):
         try:
             response = requests.get(f"https://brasilapi.com.br/api/cnpj/v1/{cnpj_limpo}", timeout=8)
             if response.status_code == 200:
@@ -227,16 +229,29 @@ nome_cliente = st.sidebar.text_input("Nome / Razão Social", value=st.session_st
 list_concessionarias = fetch_aneel_companies()
 concessionaria = st.sidebar.selectbox("Distribuidora Atual", list_concessionarias)
 
-dados_fiscais = MAPA_IMPOSTOS.get(concessionaria, {"UF": "SP", "ICMS": 0.18, "PIS_COFINS": 0.0925})
-impostos_totais = dados_fiscais["ICMS"] + dados_fiscais["PIS_COFINS"]
+# --- NOVO: CAMPOS DE ALÍQUOTAS FISCAIS CUSTOMIZÁVEIS ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("⚖️ Alíquotas Fiscais (Opcional)")
+st.sidebar.caption("Deixe em branco para usar o imposto padrão do estado da distribuidora. Preencha apenas para clientes com isenção ou liminares.")
 
+col_tax1, col_tax2 = st.sidebar.columns(2)
+custom_icms = col_tax1.number_input("ICMS (%)", value=None, placeholder="Padrão", format="%.2f", help="Ex: Digite 0 para isenção total, ou 18 para 18%.")
+custom_pis_cofins = col_tax2.number_input("PIS/COFINS (%)", value=None, placeholder="Padrão", format="%.2f", help="Ex: Digite 0 para isenção total, ou 9.25 para 9,25%.")
+
+dados_fiscais = MAPA_IMPOSTOS.get(concessionaria, {"UF": "SP", "ICMS": 0.18, "PIS_COFINS": 0.0925})
 uf_distribuidora = dados_fiscais["UF"]
+
+# Define qual ICMS e PIS/COFINS usar (se o consultor digitou, usa o dele. Se não, puxa do sistema)
+icms_aplicado = (custom_icms / 100.0) if custom_icms is not None else dados_fiscais["ICMS"]
+pis_cofins_aplicado = (custom_pis_cofins / 100.0) if custom_pis_cofins is not None else dados_fiscais["PIS_COFINS"]
+impostos_totais = icms_aplicado + pis_cofins_aplicado
+
 submercado_inferido = MAPA_SUBMERCADOS.get(uf_distribuidora, "Sudeste")
 lista_submercados = ["Sudeste", "Sul", "Nordeste", "Norte"]
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🌍 Região de Fornecimento")
-submercado_selecionado = st.sidebar.selectbox("Submercado (Auto-Deteção)", lista_submercados, index=lista_submercados.index(submercado_inferido))
+submercado_selecionado = st.sidebar.selectbox("Submercado (Auto-Detectado)", lista_submercados, index=lista_submercados.index(submercado_inferido))
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Horizonte do Contrato")
@@ -336,7 +351,7 @@ if not comercializadoras:
         "Matrix Padrão": [185.0, 191.0, 197.8, 204.5, 211.8]
     }
 
-modo_manual = st.sidebar.toggle("🔓 Desbloquear Precificação Manual")
+modo_manual = st.sidebar.toggle("🔓 Desbloquear Precificação Manual (Fornecedores)")
 dados_precos = {}
 
 if modo_manual:
@@ -352,9 +367,32 @@ if modo_manual:
 else:
     dados_precos = dados_precos_auto
 
-componentes = fetch_fatura_data(concessionaria, subgrupo, modalidade)
 
-# --- CONTROLO DE MEMÓRIA (SESSION STATE) ---
+# --- GERENCIADOR DE TARIFAS ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("⚙️ Configuração de Tarifas Concessionária")
+tarifas_ja_com_imposto = st.sidebar.toggle("Tarifas do CSV/Fatura já contêm Impostos", value=True, 
+                                           help="Desative se os valores inseridos forem a base pura de cálculo do governo.")
+customizar_tarifas_dist = st.sidebar.toggle("🔓 Customizar Tarifas (Liminares / Incentivos)")
+
+componentes_puxados = fetch_fatura_data(concessionaria, subgrupo, modalidade)
+componentes = componentes_puxados.copy()
+
+if customizar_tarifas_dist:
+    st.sidebar.caption("Insira os parâmetros regulatórios/judiciais customizados:")
+    if modalidade == "Azul":
+        componentes["tusd_demanda_p"] = st.sidebar.number_input("TUSD Demanda Ponta (R$/kW)", value=float(componentes_puxados["tusd_demanda_p"]), format="%.4f")
+        componentes["tusd_demanda_fp"] = st.sidebar.number_input("TUSD Demanda Fora Ponta (R$/kW)", value=float(componentes_puxados["tusd_demanda_fp"]), format="%.4f")
+    else:
+        componentes["tusd_demanda"] = st.sidebar.number_input("TUSD Demanda Única (R$/kW)", value=float(componentes_puxados["tusd_demanda"]), format="%.4f")
+        
+    componentes["tusd_energia_p"] = st.sidebar.number_input("TUSD Energia Ponta (R$/MWh)", value=float(componentes_puxados["tusd_energia_p"]), format="%.4f")
+    componentes["tusd_energia_fp"] = st.sidebar.number_input("TUSD Energia Fora Ponta (R$/MWh)", value=float(componentes_puxados["tusd_energia_fp"]), format="%.4f")
+    componentes["te_p"] = st.sidebar.number_input("TE Ponta (R$/MWh)", value=float(componentes_puxados["te_p"]), format="%.4f")
+    componentes["te_fp"] = st.sidebar.number_input("TE Fora Ponta (R$/MWh)", value=float(componentes_puxados["te_fp"]), format="%.4f")
+
+
+# --- CONTROLE DE MEMÓRIA (SESSION STATE) ---
 if "mostrar_resultados" not in st.session_state:
     st.session_state.mostrar_resultados = False
 
@@ -384,10 +422,31 @@ st.title(f"⚡ E-Lumia | Proposta: {nome_cenario_base} vs. E-Lumia")
 # A TELA SÓ É PROCESSADA SE A MEMÓRIA ESTIVER ATIVA
 if st.session_state.mostrar_resultados:
     
+    # --- NOVO MOTOR DE PRECIFICAÇÃO TRIBUTÁRIA BLINDADO ---
     def decompor_item(valor_base):
-        valor_com_imposto = valor_base / (1 - impostos_totais)
-        imposto_calculado = valor_com_imposto * impostos_totais
-        return valor_base, imposto_calculado, valor_com_imposto
+        if tarifas_ja_com_imposto:
+            valor_com_imposto = valor_base
+            valor_sem_imposto = valor_base * (1 - impostos_totais)
+            imposto_calculado = valor_com_imposto - valor_sem_imposto
+            return valor_sem_imposto, imposto_calculado, valor_com_imposto
+        else:
+            valor_com_imposto = valor_base / (1 - impostos_totais)
+            imposto_calculado = valor_com_imposto * impostos_totais
+            return valor_base, imposto_calculado, valor_com_imposto
+
+    # 1. EXIBIÇÃO DA MATRIZ GLOBAL DE OFERTAS
+    st.subheader(f"🏢 Matriz Global de Ofertas Mapeadas para o Estudo ({tipo_energia})")
+    linhas_matriz_global = []
+    for com in comercializadoras:
+        row_data = {"Comercializadora": com}
+        for i in range(5):
+            ano_alvo = ano_inicio_contrato + i
+            row_data[f"{ano_alvo} (R$/MWh)"] = dados_precos[com][i]
+        linhas_matriz_global.append(row_data)
+
+    df_matriz_global_tela = pd.DataFrame(linhas_matriz_global)
+    format_dict_matriz = {f"{ano_inicio_contrato + i} (R$/MWh)": moeda_br for i in range(5)}
+    st.dataframe(df_matriz_global_tela.style.format(format_dict_matriz), use_container_width=True, hide_index=True)
 
     if modalidade == "Azul":
         _, _, total_demanda_p_cat = decompor_item(demanda_ponta * componentes["tusd_demanda_p"])
@@ -427,16 +486,8 @@ if st.session_state.mostrar_resultados:
 
     anos_reais = int(tempo_contrato / 12)
     dados_comparativo_fornecedores = []
-    ano_corrente_calendario = ano_inicio_contrato
 
-    linhas_matriz_global = []
     for com in comercializadoras:
-        row_data = {"Comercializadora": com}
-        for i in range(5):
-            ano_alvo = ano_inicio_contrato + i
-            row_data[f"{ano_alvo} (R$/MWh)"] = dados_precos[com][i]
-        linhas_matriz_global.append(row_data)
-
         soma_economia_contrato = 0
         for ano_idx in range(anos_reais):
             if ambiente_atual == "Mercado Cativo":
@@ -476,10 +527,6 @@ if st.session_state.mostrar_resultados:
             "Custo_Total_Ordenacao": c_livre_mes_1 
         })
 
-    # --- PREPARAÇÃO DA MATRIZ GLOBAL ---
-    df_matriz_global_tela = pd.DataFrame(linhas_matriz_global)
-    format_dict_matriz = {f"{ano_inicio_contrato + i} (R$/MWh)": moeda_br for i in range(5)}
-
     melhor_fornecedor_row = max(dados_comparativo_fornecedores, key=lambda x: x["Economia Total Contrato (R$)"])
     melhor_com_mes = melhor_fornecedor_row["Comercializadora"]
 
@@ -500,62 +547,60 @@ if st.session_state.mostrar_resultados:
     </div>
     """, unsafe_allow_html=True)
 
-    # --- NOVO: TRANSPARÊNCIA DAS TARIFAS ---
+    # --- TRANSPARÊNCIA DAS TARIFAS ATUALIZADA ---
     with st.expander("⚙️ Transparência de Cálculo: Ver Tarifas da Concessionária Utilizadas"):
-        st.markdown(f"**Distribuidora Base:** {concessionaria} | **Carga Tributária Considerada (ICMS + PIS/COFINS):** {perc_br(impostos_totais * 100)}")
+        
+        texto_tributos = f"**ICMS:** {perc_br(icms_aplicado * 100)} | **PIS/COFINS:** {perc_br(pis_cofins_aplicado * 100)} (Carga Total: {perc_br(impostos_totais * 100)})"
+        if custom_icms is not None or custom_pis_cofins is not None:
+            texto_tributos += " *(Valores Customizados)*"
+        else:
+            texto_tributos += f" *(Padrão {dados_fiscais['UF']})*"
+            
+        st.markdown(f"**Distribuidora Base:** {concessionaria} | {texto_tributos}")
         
         if modalidade == "Azul":
             dados_tarifas = {
                 "Componente Tarifário": [
-                    "Demanda Ponta (R$/kW)", 
-                    "Demanda Fora Ponta (R$/kW)", 
-                    "TUSD Energia Ponta (R$/MWh)", 
-                    "TUSD Energia Fora Ponta (R$/MWh)", 
-                    "TE Energia Ponta (R$/MWh)", 
-                    "TE Energia Fora Ponta (R$/MWh)"
+                    "Demanda Ponta (R$/kW)", "Demanda Fora Ponta (R$/kW)", 
+                    "TUSD Energia Ponta (R$/MWh)", "TUSD Energia Fora Ponta (R$/MWh)", 
+                    "TE Energia Ponta (R$/MWh)", "TE Energia Fora Ponta (R$/MWh)"
                 ],
-                "Valor Base (Sem Imposto)": [
-                    componentes["tusd_demanda_p"], 
-                    componentes["tusd_demanda_fp"], 
-                    componentes["tusd_energia_p"], 
-                    componentes["tusd_energia_fp"], 
-                    componentes["te_p"], 
-                    componentes["te_fp"]
+                "Valor do Sistema (Base Lida)": [
+                    componentes["tusd_demanda_p"], componentes["tusd_demanda_fp"], 
+                    componentes["tusd_energia_p"], componentes["tusd_energia_fp"], 
+                    componentes["te_p"], componentes["te_fp"]
                 ]
             }
         else:
             dados_tarifas = {
                 "Componente Tarifário": [
                     "Demanda Única (R$/kW)", 
-                    "TUSD Energia Ponta (R$/MWh)", 
-                    "TUSD Energia Fora Ponta (R$/MWh)", 
-                    "TE Energia Ponta (R$/MWh)", 
-                    "TE Energia Fora Ponta (R$/MWh)"
+                    "TUSD Energia Ponta (R$/MWh)", "TUSD Energia Fora Ponta (R$/MWh)", 
+                    "TE Energia Ponta (R$/MWh)", "TE Energia Fora Ponta (R$/MWh)"
                 ],
-                "Valor Base (Sem Imposto)": [
+                "Valor do Sistema (Base Lida)": [
                     componentes["tusd_demanda"], 
-                    componentes["tusd_energia_p"], 
-                    componentes["tusd_energia_fp"], 
-                    componentes["te_p"], 
-                    componentes["te_fp"]
+                    componentes["tusd_energia_p"], componentes["tusd_energia_fp"], 
+                    componentes["te_p"], componentes["te_fp"]
                 ]
             }
             
         df_tarifas = pd.DataFrame(dados_tarifas)
-        df_tarifas["Valor Final (Com Imposto)"] = df_tarifas["Valor Base (Sem Imposto)"] / (1 - impostos_totais)
+        
+        valores_calculados_com_imposto = []
+        for v in df_tarifas["Valor do Sistema (Base Lida)"]:
+            _, _, val_com_imposto = decompor_item(v)
+            valores_calculados_com_imposto.append(val_com_imposto)
+            
+        df_tarifas["Valor Final Calculado (Com Imposto)"] = valores_calculados_com_imposto
         
         st.dataframe(df_tarifas.style.format({
-            "Valor Base (Sem Imposto)": moeda_br,
-            "Valor Final (Com Imposto)": moeda_br
+            "Valor do Sistema (Base Lida)": "R$ {:,.4f}",
+            "Valor Final Calculado (Com Imposto)": "R$ {:,.4f}"
         }), use_container_width=True, hide_index=True)
-        
-        st.caption("Nota: Na simulação do Mercado Livre, o custo da 'TE' (Tarifa de Energia) é substituído pelo preço negociado com a Comercializadora. A 'TUSD' (Distribuição) é mantida e pode receber o desconto da energia incentivada.")
 
     tab_resumo, tab_projecao, tab_concorrencia, tab_bandeiras = st.tabs([
-        "📊 1. Resumo Executivo", 
-        "📈 2. Projeção Financeira", 
-        "🏢 3. Cenário de Mercado", 
-        "🚩 4. Blindagem Tarifária"
+        "📊 1. Resumo Executivo", "📈 2. Projeção Financeira", "🏢 3. Cenário de Mercado", "🚩 4. Blindagem Tarifária"
     ])
 
     with tab_resumo:
@@ -594,7 +639,7 @@ if st.session_state.mostrar_resultados:
         custo_livre_acumulado_total = 0
 
         for ano_idx in range(anos_reais):
-            ano_civil_estudo = ano_corrente_calendario + ano_idx
+            ano_civil_estudo = ano_inicio_contrato + ano_idx
             
             if ambiente_atual == "Mercado Cativo":
                 fator_distribuidora = (1 + 0.08) ** ano_idx
