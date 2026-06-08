@@ -367,7 +367,7 @@ if botao_calcular:
 # --- ÁREA PRINCIPAL DA PLATAFORMA ---
 pld_dados = buscar_pld_internet()
 if pld_dados:
-    st.markdown(f"**Termómetro de Exposição CCEE | PLD Médio - {pld_dados['mes_ref']}**")
+    st.markdown(f"**Termômetro de Exposição CCEE | PLD Médio - {pld_dados['mes_ref']}**")
     pld1, pld2, pld3, pld4 = st.columns(4)
     def formatar_pld(mercado_nome, valor_pld):
         if mercado_nome.upper() == submercado_selecionado.upper(): return f"📍 {mercado_nome}"
@@ -395,7 +395,7 @@ if st.session_state.mostrar_resultados:
         total_demanda_cat = total_demanda_p_cat + total_demanda_fp_cat
         
         _, _, total_demanda_p_acl = decompor_item(demanda_ponta * componentes["tusd_demanda_p"] * fator_desconto_demanda)
-        _, _, total_demanda_fp_acl = decompor_item(demanda_fponta * components["tusd_demanda_fp"] * fator_desconto_demanda)
+        _, _, total_demanda_fp_acl = decompor_item(demanda_fponta * componentes["tusd_demanda_fp"] * fator_desconto_demanda)
         total_demanda_acl = total_demanda_p_acl + total_demanda_fp_acl
     else:
         _, _, total_demanda_cat = decompor_item(demanda_unica * componentes["tusd_demanda"])
@@ -499,6 +499,57 @@ if st.session_state.mostrar_resultados:
         <div style='font-size: 0.9em; color:#94A3B8; margin-top: 10px;'>👤 Consultor Responsável: {vendedor_responsavel}</div>
     </div>
     """, unsafe_allow_html=True)
+
+    # --- NOVO: TRANSPARÊNCIA DAS TARIFAS ---
+    with st.expander("⚙️ Transparência de Cálculo: Ver Tarifas da Concessionária Utilizadas"):
+        st.markdown(f"**Distribuidora Base:** {concessionaria} | **Carga Tributária Considerada (ICMS + PIS/COFINS):** {perc_br(impostos_totais * 100)}")
+        
+        if modalidade == "Azul":
+            dados_tarifas = {
+                "Componente Tarifário": [
+                    "Demanda Ponta (R$/kW)", 
+                    "Demanda Fora Ponta (R$/kW)", 
+                    "TUSD Energia Ponta (R$/MWh)", 
+                    "TUSD Energia Fora Ponta (R$/MWh)", 
+                    "TE Energia Ponta (R$/MWh)", 
+                    "TE Energia Fora Ponta (R$/MWh)"
+                ],
+                "Valor Base (Sem Imposto)": [
+                    componentes["tusd_demanda_p"], 
+                    componentes["tusd_demanda_fp"], 
+                    componentes["tusd_energia_p"], 
+                    componentes["tusd_energia_fp"], 
+                    componentes["te_p"], 
+                    componentes["te_fp"]
+                ]
+            }
+        else:
+            dados_tarifas = {
+                "Componente Tarifário": [
+                    "Demanda Única (R$/kW)", 
+                    "TUSD Energia Ponta (R$/MWh)", 
+                    "TUSD Energia Fora Ponta (R$/MWh)", 
+                    "TE Energia Ponta (R$/MWh)", 
+                    "TE Energia Fora Ponta (R$/MWh)"
+                ],
+                "Valor Base (Sem Imposto)": [
+                    componentes["tusd_demanda"], 
+                    componentes["tusd_energia_p"], 
+                    componentes["tusd_energia_fp"], 
+                    componentes["te_p"], 
+                    componentes["te_fp"]
+                ]
+            }
+            
+        df_tarifas = pd.DataFrame(dados_tarifas)
+        df_tarifas["Valor Final (Com Imposto)"] = df_tarifas["Valor Base (Sem Imposto)"] / (1 - impostos_totais)
+        
+        st.dataframe(df_tarifas.style.format({
+            "Valor Base (Sem Imposto)": moeda_br,
+            "Valor Final (Com Imposto)": moeda_br
+        }), use_container_width=True, hide_index=True)
+        
+        st.caption("Nota: Na simulação do Mercado Livre, o custo da 'TE' (Tarifa de Energia) é substituído pelo preço negociado com a Comercializadora. A 'TUSD' (Distribuição) é mantida e pode receber o desconto da energia incentivada.")
 
     tab_resumo, tab_projecao, tab_concorrencia, tab_bandeiras = st.tabs([
         "📊 1. Resumo Executivo", 
@@ -689,7 +740,7 @@ if st.session_state.mostrar_resultados:
         story.append(Spacer(1, 15))
         
         if pld_dados:
-            story.append(Paragraph(f"Termómetro de Exposição CCEE | PLD Médio - {pld_dados['mes_ref']}", h2_style))
+            story.append(Paragraph(f"Termômetro de Exposição CCEE | PLD Médio - {pld_dados['mes_ref']}", h2_style))
             pld_headers = [formatar_pld("Sudeste", 0), formatar_pld("Sul", 0), formatar_pld("Nordeste", 0), formatar_pld("Norte", 0)]
             pld_values = [moeda_br(pld_dados['Sudeste']), moeda_br(pld_dados['Sul']), moeda_br(pld_dados['Nordeste']), moeda_br(pld_dados['Norte'])]
             t_pld = Table([pld_headers, pld_values], colWidths=[183, 183, 183, 183])
@@ -777,7 +828,7 @@ if st.session_state.mostrar_resultados:
         story.append(Spacer(1, 20))
 
         kpi_values = [moeda_br(custo_atual_acumulado_total), moeda_br(custo_livre_acumulado_total), moeda_br(custo_atual_acumulado_total - custo_livre_acumulado_total)]
-        t_kpi = Table([[f"Gasto Acumulado ({ambiente_atual})", f"Gasto Acumulado E-Lumia", "Património Total Recuperado"], kpi_values], colWidths=[244, 244, 244])
+        t_kpi = Table([[f"Gasto Acumulado Estimado ({ambiente_atual})", f"Gasto Acumulado E-Lumia", "Patrimônio Total Recuperado"], kpi_values], colWidths=[244, 244, 244])
         t_kpi.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.HexColor("#0F172A")), ('BACKGROUND', (0,1), (-1,1), colors.HexColor("#1E293B")), ('TEXTCOLOR', (0,0), (-1,-1), colors.whitesmoke), ('ALIGN', (0,0), (-1,-1), 'CENTER'), ('FONTNAME', (0,1), (-1,1), 'Helvetica-Bold'), ('FONTSIZE', (0,1), (-1,1), 14), ('GRID', (0,0), (-1,-1), 2, colors.white)]))
         story.append(t_kpi)
         
@@ -791,7 +842,7 @@ if st.session_state.mostrar_resultados:
     def disparar_upload_drive(pdf_bytes_file, nome_arquivo_drive):
         resultado = upload_automatico_drive(pdf_bytes_file, nome_arquivo_drive)
         if resultado is True:
-            st.session_state.status_drive = {"sucesso": True, "msg": f"✅ Sucesso! Ficheiro guardado no Google Drive de {vendedor_responsavel}!"}
+            st.session_state.status_drive = {"sucesso": True, "msg": f"✅ Sucesso! Arquivo salvo no Google Drive de {vendedor_responsavel}!"}
         else:
             st.session_state.status_drive = {"sucesso": False, "msg": f"⚠️ Erro de Integração com Google Drive: {resultado}"}
 
