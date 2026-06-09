@@ -229,7 +229,7 @@ nome_cliente = st.sidebar.text_input("Nome / Razão Social", value=st.session_st
 list_concessionarias = fetch_aneel_companies()
 concessionaria = st.sidebar.selectbox("Distribuidora Atual", list_concessionarias)
 
-# --- NOVO: CAMPOS DE ALÍQUOTAS FISCAIS CUSTOMIZÁVEIS ---
+# --- CAMPOS DE ALÍQUOTAS FISCAIS CUSTOMIZÁVEIS ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚖️ Alíquotas Fiscais (Opcional)")
 st.sidebar.caption("Deixe em branco para usar o imposto padrão do estado da distribuidora. Preencha apenas para clientes com isenção ou liminares.")
@@ -241,7 +241,6 @@ custom_pis_cofins = col_tax2.number_input("PIS/COFINS (%)", value=None, placehol
 dados_fiscais = MAPA_IMPOSTOS.get(concessionaria, {"UF": "SP", "ICMS": 0.18, "PIS_COFINS": 0.0925})
 uf_distribuidora = dados_fiscais["UF"]
 
-# Define qual ICMS e PIS/COFINS usar (se o consultor digitou, usa o dele. Se não, puxa do sistema)
 icms_aplicado = (custom_icms / 100.0) if custom_icms is not None else dados_fiscais["ICMS"]
 pis_cofins_aplicado = (custom_pis_cofins / 100.0) if custom_pis_cofins is not None else dados_fiscais["PIS_COFINS"]
 impostos_totais = icms_aplicado + pis_cofins_aplicado
@@ -422,7 +421,6 @@ st.title(f"⚡ E-Lumia | Proposta: {nome_cenario_base} vs. E-Lumia")
 # A TELA SÓ É PROCESSADA SE A MEMÓRIA ESTIVER ATIVA
 if st.session_state.mostrar_resultados:
     
-    # --- NOVO MOTOR DE PRECIFICAÇÃO TRIBUTÁRIA BLINDADO ---
     def decompor_item(valor_base):
         if tarifas_ja_com_imposto:
             valor_com_imposto = valor_base
@@ -486,6 +484,7 @@ if st.session_state.mostrar_resultados:
 
     anos_reais = int(tempo_contrato / 12)
     dados_comparativo_fornecedores = []
+    ano_corrente_calendario = ano_inicio_contrato
 
     for com in comercializadoras:
         soma_economia_contrato = 0
@@ -547,9 +546,7 @@ if st.session_state.mostrar_resultados:
     </div>
     """, unsafe_allow_html=True)
 
-    # --- TRANSPARÊNCIA DAS TARIFAS ATUALIZADA ---
     with st.expander("⚙️ Transparência de Cálculo: Ver Tarifas da Concessionária Utilizadas"):
-        
         texto_tributos = f"**ICMS:** {perc_br(icms_aplicado * 100)} | **PIS/COFINS:** {perc_br(pis_cofins_aplicado * 100)} (Carga Total: {perc_br(impostos_totais * 100)})"
         if custom_icms is not None or custom_pis_cofins is not None:
             texto_tributos += " *(Valores Customizados)*"
@@ -605,6 +602,32 @@ if st.session_state.mostrar_resultados:
 
     with tab_resumo:
         st.markdown(f"### Composição de Custos ({ano_inicio_contrato})")
+        
+        # --- DASHBOARD DE REDUÇÃO EXCLUSIVA DE ENERGIA (TE) ---
+        consumo_mwh_mes = consumo_total_mes_kwh / 1000
+        if consumo_mwh_mes > 0:
+            if ambiente_atual == "Mercado Cativo":
+                te_media_base_mwh = (total_te_p_cat + total_te_fp_cat) / consumo_mwh_mes
+                label_base = "Tarifa Média de Energia (Cativo)"
+            else:
+                te_media_base_mwh = total_energia_atual_concorrente / consumo_mwh_mes
+                label_base = "Preço Energia Atual (Concorrente)"
+                
+            te_media_livre_mwh = total_energia_mes_melhor / consumo_mwh_mes
+            reducao_te_perc = ((te_media_base_mwh - te_media_livre_mwh) / te_media_base_mwh) * 100 if te_media_base_mwh > 0 else 0
+        else:
+            te_media_base_mwh = 0
+            te_media_livre_mwh = 0
+            reducao_te_perc = 0
+            label_base = "Tarifa Média Base"
+
+        st.markdown("#### ⚡ Comparativo Direto da Commodity (Energia)")
+        col_te1, col_te2, col_te3 = st.columns(3)
+        col_te1.metric(label_base, f"{moeda_br(te_media_base_mwh)} /MWh")
+        col_te2.metric(f"Preço E-Lumia ({melhor_com_mes})", f"{moeda_br(te_media_livre_mwh)} /MWh")
+        col_te3.metric("Redução Exclusiva na Energia", f"{perc_br(reducao_te_perc)}", delta=f"-{perc_br(reducao_te_perc)}", delta_color="inverse")
+        st.markdown("---")
+
         df_atual_peso = df_atual_peso[df_atual_peso["Valor"] > 0].copy()
         df_atual_peso["Peso (%)"] = (df_atual_peso["Valor"] / df_atual_peso["Valor"].sum()) * 100
 
