@@ -115,6 +115,10 @@ def load_local_data():
 def load_precos_data():
     try:
         df_precos = pd.read_csv(NOME_ARQUIVO_PRECOS, sep=None, engine='python', encoding='utf-8-sig', on_bad_lines='skip')
+        df_precos.columns = df_precos.columns.str.strip().str.title()
+        cols = df_precos.columns.tolist()
+        if cols and ("Unnamed" in cols[0] or cols[0] == ""):
+            df_precos.rename(columns={cols[0]: "Comercializadora"}, inplace=True)
         return df_precos
     except Exception as e:
         return pd.DataFrame()
@@ -289,7 +293,7 @@ consumo_p = consumo_kwh_p / 1000
 consumo_total_mes_kwh = consumo_kwh_fp + consumo_kwh_p
 consumo_total_ano_mwh = (consumo_total_mes_kwh / 1000) * 12
 
-# --- INTEGRAÇÃO DO BANCO DE PREÇOS (NOVO MOTOR ROBUSTO E FLEXÍVEL) ---
+# --- INTEGRAÇÃO DO BANCO DE PREÇOS ---
 data_atualizacao_csv = "Dado Indisponível"
 if os.path.exists(NOME_ARQUIVO_PRECOS):
     timestamp_modificacao = os.path.getmtime(NOME_ARQUIVO_PRECOS)
@@ -303,65 +307,43 @@ comercializadoras = []
 dados_precos_auto = {}
 
 if not df_precos_globais.empty:
-    # 1. Padroniza todas as colunas para MAIÚSCULAS e remove espaços invisíveis
-    df_precos_globais.columns = df_precos_globais.columns.astype(str).str.strip().str.upper()
     cols = df_precos_globais.columns.tolist()
+    if "Comercializadora" not in cols:
+        df_precos_globais.rename(columns={cols[0]: "Comercializadora"}, inplace=True)
+        cols = df_precos_globais.columns.tolist()
 
-    # 2. Busca Universal de Colunas (Fuzzy Match)
-    col_comerc = next((c for c in cols if "COMERCIALIZADORA" in c or "FORNECEDOR" in c or "GESTORA" in c), None)
-    col_ano = next((c for c in cols if "ANO" in c), None)
-    col_prod = next((c for c in cols if "PRODUTO" in c or "ENERGIA" in c or "TIPO" in c), None)
-    col_sub = next((c for c in cols if submercado_selecionado.upper() in c), None)
-
-    # 3. Resolve CSV sem cabeçalho na primeira coluna
-    if not col_comerc and cols and ("UNNAMED" in cols[0] or cols[0] == ""):
-        df_precos_globais.rename(columns={cols[0]: "COMERCIALIZADORA"}, inplace=True)
-        col_comerc = "COMERCIALIZADORA"
-
-    if col_comerc and col_ano and col_sub:
-        df_precos_globais[col_ano] = pd.to_numeric(df_precos_globais[col_ano], errors='coerce')
-        
-        # 4. Filtro Super Tolerante de Produto (ignora %, espaços, maiúsculas/minúsculas)
-        if col_prod:
-            prod_busca = tipo_energia.upper().replace('%', '').strip()
-            mask_filtros = df_precos_globais[col_prod].astype(str).str.upper().str.replace('%', '').str.contains(prod_busca)
-            df_filtrado = df_precos_globais[mask_filtros].copy()
+    if "Comercializadora" in cols and "Ano" in cols and submercado_selecionado in cols:
+        df_precos_globais["Ano"] = pd.to_numeric(df_precos_globais["Ano"], errors='coerce')
+        if "Produto" in cols:
+            mask_filtros = (df_precos_globais["Produto"].astype(str).str.strip().str.upper() == tipo_energia.upper())
+            df_filtrado = df_precos_globais[mask_filtros].sort_values(by=['Comercializadora', 'Ano'])
         else:
-            df_filtrado = df_precos_globais.copy()
+            df_filtrado = df_precos_globais.sort_values(by=['Comercializadora', 'Ano'])
             
-        df_filtrado.sort_values(by=[col_comerc, col_ano], inplace=True)
-        comercializadoras = df_filtrado[col_comerc].dropna().unique().tolist()
+        comercializadoras = df_filtrado['Comercializadora'].dropna().unique().tolist()
         
         for com in comercializadoras:
-            df_com = df_filtrado[df_filtrado[col_comerc] == com]
+            df_com = df_filtrado[df_filtrado['Comercializadora'] == com]
             precos_limpos = []
             
             for i in range(5):
                 ano_alvo = ano_inicio_contrato + i
-                row_ano = df_com[df_com[col_ano] == ano_alvo]
+                row_ano = df_com[df_com['Ano'] == ano_alvo]
                 
                 if not row_ano.empty:
-                    p = row_ano[col_sub].iloc[0]
-                    # 5. Extrator Matemático de Preços (Corrige padrão BR: R$ 1.200,50 -> 1200.50)
+                    p = row_ano[submercado_selecionado].iloc[0]
                     str_p = str(p).upper().replace('R$', '').strip()
-                    str_p = re.sub(r'[^\d,.-]', '', str_p) # Mantém apenas números, ponto, vírgula e sinal negativo
-                    
-                    if '.' in str_p and ',' in str_p:
-                        str_p = str_p.replace('.', '').replace(',', '.') # Ex: 1.180,50 vira 1180.50
-                    elif ',' in str_p:
-                        str_p = str_p.replace(',', '.') # Ex: 180,50 vira 180.50
-                        
+                    str_p = re.sub(r'[^\d,.-]', '', str_p)
+                    str_p = str_p.replace(',', '.')
                     valor_num = pd.to_numeric(str_p, errors='coerce')
                     if pd.isna(valor_num): valor_num = 0.0
                     precos_limpos.append(float(valor_num))
                 else:
-                    # Falha segura: se o ano não existir no Excel, repete o último valor lido (Flat)
                     precos_limpos.append(precos_limpos[-1] if precos_limpos else 0.0)
                     
             dados_precos_auto[com] = precos_limpos
 
 if not comercializadoras:
-    st.sidebar.warning(f"⚠️ A coluna '{submercado_selecionado}' não foi mapeada corretamente no arquivo de tarifas. Usando valores padrões de contingência.")
     comercializadoras = ["Casa dos Ventos Padrão", "Matrix Padrão"]
     dados_precos_auto = {
         "Casa dos Ventos Padrão": [180.0, 186.0, 192.5, 199.2, 206.1],
@@ -679,7 +661,7 @@ if st.session_state.mostrar_resultados:
         custo_livre_acumulado_total = 0
 
         for ano_idx in range(anos_reais):
-            ano_civil_estudo = ano_corrente_calendario + ano_idx
+            ano_civil_estudo = ano_inicio_contrato + ano_idx
             
             if ambiente_atual == "Mercado Cativo":
                 fator_distribuidora = (1 + 0.08) ** ano_idx
