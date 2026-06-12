@@ -596,8 +596,13 @@ if st.session_state.mostrar_resultados:
             "Valor Final Calculado (Com Imposto)": "R$ {:,.4f}"
         }), use_container_width=True, hide_index=True)
 
-    tab_resumo, tab_projecao, tab_concorrencia, tab_bandeiras = st.tabs([
-        "📊 1. Resumo Executivo", "📈 2. Projeção Financeira", "🏢 3. Cenário de Mercado", "🚩 4. Blindagem Tarifária"
+    # --- ABAS DE ATUALIZADAS COM A NOVA ANÁLISE DE TE ---
+    tab_resumo, tab_projecao, tab_concorrencia, tab_commodity, tab_bandeiras = st.tabs([
+        "📊 1. Resumo Executivo", 
+        "📈 2. Projeção Financeira", 
+        "🏢 3. Cenário de Mercado", 
+        "📉 4. Análise de Commodity (TE)", 
+        "🚩 5. Blindagem Tarifária"
     ])
 
     with tab_resumo:
@@ -725,6 +730,69 @@ if st.session_state.mostrar_resultados:
             st.dataframe(df_fornecedores_tela[['Comercializadora', 'Economia Média Mês (R$)', 'Economia Média Ano (R$)', 'Economia Total Contrato (R$)']].style.format({
                 "Economia Média Mês (R$)": moeda_br, "Economia Média Ano (R$)": moeda_br, "Economia Total Contrato (R$)": moeda_br
             }), use_container_width=True, hide_index=True)
+
+    # --- NOVA ABA: ANÁLISE COMPARATIVA DE TE X TE ANO A ANO ---
+    with tab_commodity:
+        st.markdown(f"### 📉 Análise Comparativa da Tarifa de Energia (TE) vs. Proposta ({melhor_com_mes})")
+        st.caption("Esta tabela isola a tarifa de fornecimento da energia (commodity) para demonstrar o ganho real na mesa de negociação, desconsiderando as tarifas reguladas de distribuição (TUSD).")
+
+        linhas_analise_te = []
+        consumo_mwh_mes = consumo_total_mes_kwh / 1000
+
+        for ano_idx in range(anos_reais):
+            ano_civil_estudo = ano_inicio_contrato + ano_idx
+            
+            # 1. Determina a TE média do Cenário Base para o ano específico
+            if ambiente_atual == "Mercado Cativo":
+                # Aplica o reajuste anual estimado da distribuidora sobre a TE média inicial
+                fator_distribuidora = (1 + 0.08) ** ano_idx
+                te_base_mwh_ano = ((total_te_p_cat + total_te_fp_cat) / consumo_mwh_mes) * fator_distribuidora
+            else:
+                # Mercado Livre atual: reajusta o preço do concorrente pelo IPCA estipulado
+                fator_energia_concorrente = (1 + (ipca_medio / 100)) ** ano_idx
+                te_base_mwh_ano = preco_energia_atual_livre * fator_energia_concorrente
+
+            # 2. Resgata a proposta da melhor comercializadora para o ano específico (Pura sem impostos se decomposta)
+            preco_prop_base = dados_precos[melhor_com_mes][ano_idx]
+            # Decompõe para garantir a comparação correta com ou sem imposto dependendo do parâmetro geral
+            _, _, te_proposta_mwh_ano = decompor_item(preco_prop_base)
+
+            # 3. Métricas de redução
+            reducao_reais_mwh = te_base_mwh_ano - te_proposta_mwh_ano
+            reducao_percentual = (reducao_reais_mwh / te_base_mwh_ano) * 100 if te_base_mwh_ano > 0 else 0.0
+
+            linhas_analise_te.append({
+                "Ano": str(ano_civil_estudo),
+                f"TE Cenário Base ({nome_cenario_base})": te_base_mwh_ano,
+                f"TE Proposta ({melhor_com_mes})": te_proposta_mwh_ano,
+                "Diferença /MWh (R$)": reducao_reais_mwh,
+                "Redução Real na Tarifa (%)": reducao_percentual
+            })
+
+        df_analise_te = pd.DataFrame(linhas_analise_te)
+
+        # Formatação visual premium para a tabela do Streamlit
+        st.dataframe(
+            df_analise_te.style.format({
+                f"TE Cenário Base ({nome_cenario_base})": "R$ {:,.2f}/MWh",
+                f"TE Proposta ({melhor_com_mes})": "R$ {:,.2f}/MWh",
+                "Diferença /MWh (R$)": "R$ {:,.2f}/MWh",
+                "Redução Real na Tarifa (%)": perc_br
+            }).highlight_max(subset=["Redução Real na Tarifa (%)"], color="#1e3a1e"), 
+            use_container_width=True, 
+            hide_index=True
+        )
+
+        # Gráfico de linha rápido para mostrar o descasamento positivo das curvas de tarifa
+        fig_curva_te = px.line(
+            df_analise_te, x="Ano", 
+            y=[f"TE Cenário Base ({nome_cenario_base})", f"TE Proposta ({melhor_com_mes})"],
+            title="Tendência das Tarifas de Energia ao Longo do Contrato",
+            labels={"value": "Tarifa (R$/MWh)", "variable": "Cenário"},
+            color_discrete_map={f"TE Cenário Base ({nome_cenario_base})": "#ef4444", f"TE Proposta ({melhor_com_mes})": "#22c55e"}
+        )
+        fig_curva_te.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font_color="white")
+        st.plotly_chart(fig_curva_te, use_container_width=True)
 
     with tab_bandeiras:
         st.markdown(f"### 🚩 Blindagem contra Bandeiras Tarifárias (Garantia E-Lumia)")
@@ -957,4 +1025,4 @@ if st.session_state.mostrar_resultados:
         st.error(f"⚠️ Erro ao gerar o PDF. Verifique se os dados estão preenchidos corretamente. (Log técnico: {erro_pdf})")
 
 else:
-    st.info("👋 Preencha os dados do cliente e clique em **Gerar Diagnóstico Comercial**. As abas do painel executivo aparecerão aqui.")
+    st.info("👋 Preencha os dados do cliente na barra lateral e clique em **Gerar Diagnóstico Comercial** para iniciar a análise.")
